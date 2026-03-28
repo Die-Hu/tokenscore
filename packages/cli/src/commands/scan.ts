@@ -91,6 +91,12 @@ export function registerScanCommand(program: Command): void {
         let toolTokens = 0;
 
         for (const raw of sessions) {
+          // Skip synthetic/internal sessions with no real content
+          if (raw.modelId === "<synthetic>" || raw.modelId === "unknown") {
+            skipped++;
+            continue;
+          }
+
           // Skip already imported sessions
           if (sessionRepo.existsByExternalId(raw.sessionId, raw.toolId)) {
             skipped++;

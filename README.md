@@ -75,6 +75,19 @@ Based on model tier rankings (S/A/B/C/D) derived from coding benchmarks.
 
 Grades: `S+ S A+ A A- B+ B B- C D F`
 
+## Prerequisites
+
+### Statusline Plugin Only (zero native deps)
+- **Node.js 20+** — that's it! No C++ compiler needed.
+
+### CLI Tool (requires native SQLite)
+- **Node.js 20+**
+- **macOS**: `xcode-select --install` (Xcode Command Line Tools)
+- **Windows**: [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with "Desktop development with C++" workload + Python 3
+- **Linux**: `sudo apt install build-essential python3` (or equivalent)
+
+> The CLI uses `better-sqlite3` which compiles native SQLite. Prebuilt binaries are available for most Node.js LTS versions. If prebuilds fail, it falls back to source compilation.
+
 ## Architecture
 
 ```
