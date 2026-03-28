@@ -1,0 +1,50 @@
+{
+  "name": "@tokenscore/core",
+  "version": "0.1.0",
+  "description": "AI tool token consumption tracking and three-dimensional scoring engine",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "drizzle-orm": "^0.38.0",
+    "zod": "^3.24.0",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/uuid": "^10.0.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0"
+  },
+  "files": ["dist"],
+  "license": "MIT",
+  "author": "Die-Hu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Die-Hu/tokenscore.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/Die-Hu/tokenscore",
+  "bugs": {
+    "url": "https://github.com/Die-Hu/tokenscore/issues"
+  },
+  "keywords": ["token", "ai", "scoring", "llm", "cost-tracking", "claude", "claude-code"],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

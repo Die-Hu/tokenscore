@@ -1,0 +1,20 @@
+{
+  "name": "tokenscore",
+  "owner": {
+    "name": "Die-Hu",
+    "email": "diehu@ucsb.edu"
+  },
+  "metadata": {
+    "description": "Real-time token cost tracking, 3D scoring, and usage analytics for Claude Code",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "tokenscore",
+      "source": "./",
+      "description": "Track token consumption, costs, cache efficiency, and project scoring — all in your Claude Code statusline",
+      "category": "monitoring",
+      "tags": ["tokenscore", "cost", "token", "analytics", "statusline", "scoring"]
+    }
+  ]
+}

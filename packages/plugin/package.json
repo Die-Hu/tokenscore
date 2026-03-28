@@ -1,0 +1,30 @@
+{
+  "name": "@tokenscore/plugin",
+  "version": "0.1.0",
+  "description": "Claude Code statusline plugin for TokenScore — real-time token tracking and cost display",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@tokenscore/core": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.5.0",
+    "typescript": "^5.7.0"
+  },
+  "files": ["dist"],
+  "license": "MIT",
+  "author": "Die-Hu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Die-Hu/tokenscore.git",
+    "directory": "packages/plugin"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

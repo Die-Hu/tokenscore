@@ -1,0 +1,44 @@
+{
+  "name": "@tokenscore/cli",
+  "version": "0.1.0",
+  "description": "CLI for tracking AI tool token consumption, costs, and scoring",
+  "type": "module",
+  "bin": {
+    "tokenscore": "./dist/bin/tokenscore.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@tokenscore/core": "workspace:*",
+    "commander": "^13.1.0",
+    "chalk": "^5.4.0",
+    "cli-table3": "^0.6.5",
+    "ora": "^8.2.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.4.0",
+    "typescript": "^5.7.0"
+  },
+  "files": ["dist"],
+  "license": "MIT",
+  "author": "Die-Hu",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Die-Hu/tokenscore.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/Die-Hu/tokenscore",
+  "bugs": {
+    "url": "https://github.com/Die-Hu/tokenscore/issues"
+  },
+  "keywords": ["token", "ai", "scoring", "llm", "cli", "cost-tracking", "claude", "claude-code"],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "tokenscore-monorepo",
+  "private": true,
+  "description": "TokenScore — AI tool token consumption tracking and three-dimensional scoring system",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "turbo lint",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "turbo": "^2.4.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Die-Hu/tokenscore.git"
+  },
+  "license": "MIT"
+}

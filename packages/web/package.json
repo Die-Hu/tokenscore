@@ -1,0 +1,17 @@
+{
+  "name": "@tokenscore/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo 'web build - placeholder'",
+    "dev": "echo 'web dev - placeholder'",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@tokenscore/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
