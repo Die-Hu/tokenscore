@@ -1,5 +1,4 @@
 node_modules/
-dist/
 .turbo/
 *.tsbuildinfo
 .env
@@ -11,3 +10,8 @@ coverage/
 .idea/
 *.swp
 *.swo
+
+# Ignore dist for all packages except plugin (pre-built for zero-build install)
+packages/core/dist/
+packages/cli/dist/
+packages/web/dist/

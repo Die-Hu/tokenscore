@@ -5,58 +5,43 @@ allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
 
 # TokenScore Setup
 
-You are helping the user set up the TokenScore statusline plugin for Claude Code.
+Set up the TokenScore statusline plugin. The plugin is **pre-built** — no compilation or npm install needed.
 
 ## Steps
 
-1. Detect the OS and runtime:
+1. Find the plugin installation path. Run this to locate it:
    ```bash
-   node --version
-   ```
-   Also check if this is Windows (look for `USERPROFILE` env) or macOS/Linux (look for `HOME` env).
-
-2. Find the plugin path. Check in order:
-   - `~/.claude/plugins/cache/` (marketplace install on macOS/Linux)
-   - `%USERPROFILE%\.claude\plugins\cache\` (marketplace install on Windows)
-   - The current working directory if running from source
-
-3. Build the plugin if `packages/plugin/dist/index.js` does not exist:
-   ```bash
-   cd <plugin-path> && npm run build
+   find ~/.claude/plugins/cache/tokenscore -name "index.js" -path "*/plugin/dist/*" 2>/dev/null | head -1
    ```
 
-4. Read the user's current settings:
-   - macOS/Linux: `~/.claude/settings.json`
-   - Windows: `%USERPROFILE%\.claude\settings.json`
+   If that returns nothing, try the repo checkout location or the current directory:
+   ```bash
+   ls packages/plugin/dist/index.js 2>/dev/null
+   ```
 
-5. Add the statusLine to settings.json. Use the full absolute path to avoid resolution issues:
+2. Read the user's current `~/.claude/settings.json`.
 
+3. Add or update the `statusLine` field with the **absolute path** to the plugin:
    ```json
    {
      "statusLine": {
        "type": "command",
-       "command": "node <ABSOLUTE_PATH>/packages/plugin/dist/index.js"
+       "command": "node <ABSOLUTE_PATH_TO>/packages/plugin/dist/index.js"
      }
    }
    ```
 
-   **Important:** On Windows, escape backslashes in the path or use forward slashes.
+   Make sure to preserve all existing settings (env, permissions, enabledPlugins, etc.).
 
-6. Create the config and data directories:
-   - macOS/Linux: `mkdir -p ~/.claude/plugins/tokenscore && mkdir -p ~/.tokenscore`
-   - Windows: Use `node -e "require('fs').mkdirSync(require('path').join(require('os').homedir(),'.claude','plugins','tokenscore'),{recursive:true})"` and similar for `.tokenscore`
+4. Create the config directory:
+   ```bash
+   node -e "require('fs').mkdirSync(require('path').join(require('os').homedir(),'.claude','plugins','tokenscore'),{recursive:true})"
+   ```
 
-7. Confirm setup is complete. The statusline will appear after restarting Claude Code.
+5. Tell the user: "TokenScore statusline is ready. Restart Claude Code to see it."
 
-## Prerequisites
-- **Node.js 20+** is required
-- The CLI tool (`@tokenscore/cli`) additionally requires C++ build tools for SQLite:
-  - **macOS**: `xcode-select --install`
-  - **Windows**: Visual Studio Build Tools with "Desktop development with C++" workload
-  - **Linux**: `build-essential` package
-- The **statusline plugin does NOT require** any native build tools (zero native dependencies)
-
-## Notes
-- Configuration: `~/.claude/plugins/tokenscore/config.json`
-- Use `/tokenscore:configure` to customize display options
-- The plugin is invoked every ~300ms by Claude Code and must respond within that window
+## Important Notes
+- The plugin dist/ is **pre-built and committed to the repo** — NO build step needed
+- The plugin has **zero native dependencies** — no C++ compiler, no Python, no node-gyp
+- Only requires Node.js 20+
+- Configuration at `~/.claude/plugins/tokenscore/config.json` (use `/tokenscore:configure`)
