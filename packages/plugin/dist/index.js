@@ -118,7 +118,7 @@ function fmtDuration(secs) {
 function bar(pct, w = 12) {
   const filled = Math.round(pct / 100 * w);
   const empty = w - filled;
-  const b = "#".repeat(filled) + "-".repeat(empty);
+  const b = "\u2588".repeat(filled) + "\u2591".repeat(empty);
   if (pct >= 90) return c.bRed(b);
   if (pct >= 70) return c.bYellow(b);
   return c.bGreen(b);

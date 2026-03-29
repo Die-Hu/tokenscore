@@ -100,12 +100,11 @@ function fmtDuration(secs: number): string {
   return `${Math.floor(m / 60)}h${m % 60}m`;
 }
 
-// ── Progress bar (Windows-safe: uses ASCII when no Unicode support) ──
+// ── Progress bar ─────────────────────────────────────────────────
 function bar(pct: number, w = 12): string {
   const filled = Math.round((pct / 100) * w);
   const empty = w - filled;
-  // Use Unicode block chars — works on modern terminals including Windows Terminal
-  const b = "#".repeat(filled) + "-".repeat(empty);
+  const b = "█".repeat(filled) + "░".repeat(empty);
   if (pct >= 90) return c.bRed(b);
   if (pct >= 70) return c.bYellow(b);
   return c.bGreen(b);
