@@ -37,11 +37,12 @@ Real-time token consumption tracking, cost analysis, and three-dimensional scori
 
 ### As Claude Code Plugin (Recommended)
 
+![Install Demo](docs/install-demo.gif)
+
 ```bash
 /plugin marketplace add Die-Hu/tokenscore
 /plugin install tokenscore
 /plugins reload
-/tokenscore:setup
 ```
 
 ### As CLI Tool
