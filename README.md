@@ -4,6 +4,25 @@
 
 Real-time token consumption tracking, cost analysis, and three-dimensional scoring for AI coding tools.
 
+![TokenScore Statusline in Ghostty](docs/screenshot-statusline.png)
+
+## Statusline Preview
+
+```
+[S] Opus 4.6 (1M context) ██░░░░░░░░░░ 20%
+  $ $3.83 | cache 100% | IQ 95
+  5h █░░░░░░░ 7% ~3h44m
+```
+
+| Element | Meaning |
+|---------|---------|
+| `[S]` | Model tier badge (S/A/B/C/D) |
+| `██░░░░░░░░░░ 20%` | Context window usage (green/yellow/red) |
+| `$3.83` | Real-time session cost |
+| `cache 100%` | Cache hit rate — higher = cheaper tokens |
+| `IQ 95` | Model intelligence score (0-100) |
+| `5h █░░░░░░░ 7%` | 5-hour rate limit usage with reset countdown |
+
 ## Features
 
 - **Real-time Statusline** — See token costs, cache efficiency, and rate limits directly in your Claude Code terminal
@@ -12,6 +31,7 @@ Real-time token consumption tracking, cost analysis, and three-dimensional scori
 - **3D Scoring System** — Rates sessions on Efficiency (40%) + Difficulty (35%) + Model Intelligence (25%)
 - **CLI Dashboard** — Full command-line interface for scanning, scoring, and exporting data
 - **Stats Integration** — Reads `stats-cache.json` for global usage analytics with activity heatmaps
+- **Zero-build Install** — Plugin dist is pre-built, no compilation needed
 
 ## Quick Start
 
@@ -24,7 +44,7 @@ Real-time token consumption tracking, cost analysis, and three-dimensional scori
 # Install the plugin
 /plugin install tokenscore
 
-# Run setup
+# Run setup (zero build, just configures statusline)
 /tokenscore:setup
 ```
 
@@ -95,7 +115,7 @@ tokenscore/
   packages/
     core/     @tokenscore/core    — Parsing, scoring, pricing, database
     cli/      @tokenscore/cli     — Command-line interface
-    plugin/   @tokenscore/plugin  — Claude Code statusline plugin
+    plugin/   @tokenscore/plugin  — Claude Code statusline plugin (pre-built)
     web/      @tokenscore/web     — Web dashboard (planned)
 ```
 

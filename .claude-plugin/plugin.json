@@ -1,7 +1,7 @@
 {
   "name": "tokenscore",
   "description": "Real-time token cost tracking, 3D scoring, and usage analytics for Claude Code",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "Die-Hu",
     "url": "https://github.com/Die-Hu"

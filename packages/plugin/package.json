@@ -1,6 +1,6 @@
 {
   "name": "@tokenscore/plugin",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Claude Code statusline plugin for TokenScore — real-time token tracking and cost display",
   "type": "module",
   "main": "dist/index.js",

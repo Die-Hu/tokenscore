@@ -14,7 +14,7 @@ export function createProgram(): Command {
   program
     .name("tokenscore")
     .description("AI tool token consumption tracker & project scorer")
-    .version("0.1.0");
+    .version("0.2.0");
 
   registerScanCommand(program);
   registerStatusCommand(program);
