@@ -7,8 +7,7 @@
     "url": "https://github.com/Die-Hu"
   },
   "commands": [
-    "./commands/setup.md",
-    "./commands/configure.md"
+    "./commands/setup.md"
   ],
   "homepage": "https://github.com/Die-Hu/tokenscore",
   "repository": "https://github.com/Die-Hu/tokenscore",

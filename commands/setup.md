@@ -1,6 +1,6 @@
 ---
 description: Set up TokenScore as your Claude Code statusline
-allowed-tools: Bash, Read, Edit, Write, AskUserQuestion
+allowed-tools: Bash, Read, Edit, Write
 ---
 
 # TokenScore Setup
@@ -9,39 +9,26 @@ Set up the TokenScore statusline plugin. The plugin is **pre-built** — no comp
 
 ## Steps
 
-1. Find the plugin installation path. Run this to locate it:
+1. Find the plugin path:
    ```bash
-   find ~/.claude/plugins/cache/tokenscore -name "index.js" -path "*/plugin/dist/*" 2>/dev/null | head -1
+   find ~/.claude/plugins -name "index.js" -path "*/tokenscore*/plugin/dist/*" 2>/dev/null | head -1
    ```
 
-   If that returns nothing, try the repo checkout location or the current directory:
-   ```bash
-   ls packages/plugin/dist/index.js 2>/dev/null
-   ```
+2. Read `~/.claude/settings.json`.
 
-2. Read the user's current `~/.claude/settings.json`.
-
-3. Add or update the `statusLine` field with the **absolute path** to the plugin:
+3. Add or update the `statusLine` field using the **absolute path** found in step 1:
    ```json
    {
      "statusLine": {
        "type": "command",
-       "command": "node <ABSOLUTE_PATH_TO>/packages/plugin/dist/index.js"
+       "command": "node <ABSOLUTE_PATH>/packages/plugin/dist/index.js"
      }
    }
    ```
+   Preserve all existing settings.
 
-   Make sure to preserve all existing settings (env, permissions, enabledPlugins, etc.).
+4. Tell the user: "TokenScore is ready. Restart Claude Code to see the statusline."
 
-4. Create the config directory:
-   ```bash
-   node -e "require('fs').mkdirSync(require('path').join(require('os').homedir(),'.claude','plugins','tokenscore'),{recursive:true})"
-   ```
-
-5. Tell the user: "TokenScore statusline is ready. Restart Claude Code to see it."
-
-## Important Notes
-- The plugin dist/ is **pre-built and committed to the repo** — NO build step needed
-- The plugin has **zero native dependencies** — no C++ compiler, no Python, no node-gyp
-- Only requires Node.js 20+
-- Configuration at `~/.claude/plugins/tokenscore/config.json` (use `/tokenscore:configure`)
+## Notes
+- Pre-built, zero native dependencies, only requires Node.js 20+
+- Works with default configuration out of the box
