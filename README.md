@@ -139,7 +139,7 @@ Supports: Claude Opus/Sonnet/Haiku (4.6/4.5/4/3.x), GPT-4o, GPT-4.1, o3, o4-mini
 ## Uninstall
 
 ```bash
-claude plugin uninstall tokenscore@tokenscore && claude plugin marketplace remove tokenscore && rm -rf ~/.claude/plugins/cache/tokenscore ~/.claude/plugins/marketplaces/tokenscore ~/.claude/plugins/tokenscore ~/.tokenscore
+claude plugin uninstall tokenscore@tokenscore && claude plugin marketplace remove tokenscore && rm -rf ~/.claude/plugins/cache/tokenscore ~/.claude/plugins/marketplaces/tokenscore ~/.tokenscore
 ```
 
 Then remove the `"statusLine"` key from `~/.claude/settings.json`.
