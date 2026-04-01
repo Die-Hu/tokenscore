@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/index.ts
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, openSync, readSync, closeSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -69,13 +69,9 @@ var RESET = `${ESC}0m`;
 var BOLD = `${ESC}1m`;
 var DIM = `${ESC}2m`;
 var c = {
-  red: (s) => `${ESC}31m${s}${RESET}`,
   green: (s) => `${ESC}32m${s}${RESET}`,
-  yellow: (s) => `${ESC}33m${s}${RESET}`,
-  blue: (s) => `${ESC}34m${s}${RESET}`,
-  magenta: (s) => `${ESC}35m${s}${RESET}`,
-  cyan: (s) => `${ESC}36m${s}${RESET}`,
   gray: (s) => `${ESC}90m${s}${RESET}`,
+  blue: (s) => `${ESC}34m${s}${RESET}`,
   bold: (s) => `${BOLD}${s}${RESET}`,
   dim: (s) => `${DIM}${s}${RESET}`,
   bGreen: (s) => `${ESC}92m${s}${RESET}`,
@@ -83,22 +79,7 @@ var c = {
   bRed: (s) => `${ESC}91m${s}${RESET}`,
   bMagenta: (s) => `${ESC}95m${s}${RESET}`
 };
-var DEFAULT_CONFIG = {
-  showCost: true,
-  showModel: true,
-  showRateLimit: true,
-  showTokenBreakdown: true,
-  showScore: true,
-  costWarningThreshold: 5
-};
-function loadConfig() {
-  try {
-    const p = join(homedir(), ".claude", "plugins", "tokenscore", "config.json");
-    if (existsSync(p)) return { ...DEFAULT_CONFIG, ...JSON.parse(readFileSync(p, "utf-8")) };
-  } catch {
-  }
-  return DEFAULT_CONFIG;
-}
+var COST_WARN = 5;
 function fmtTok(n) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
@@ -109,7 +90,7 @@ function fmtCost(usd) {
   if (usd < 1) return `$${usd.toFixed(3)}`;
   return `$${usd.toFixed(2)}`;
 }
-function fmtDuration(secs) {
+function fmtDur(secs) {
   if (secs < 60) return `${secs}s`;
   const m = Math.floor(secs / 60);
   if (m < 60) return `${m}m`;
@@ -117,39 +98,76 @@ function fmtDuration(secs) {
 }
 function bar(pct, w = 12) {
   const filled = Math.round(pct / 100 * w);
-  const empty = w - filled;
-  const b = "\u2588".repeat(filled) + "\u2591".repeat(empty);
+  const b = "\u2588".repeat(filled) + "\u2591".repeat(w - filled);
   if (pct >= 90) return c.bRed(b);
   if (pct >= 70) return c.bYellow(b);
   return c.bGreen(b);
 }
-function loadCostCache(sid) {
+var CACHE_DIR = join(homedir(), ".tokenscore");
+var CACHE_PATH = join(CACHE_DIR, ".cost-cache.json");
+function loadCache() {
   try {
-    const p = join(homedir(), ".tokenscore", ".cost-cache.json");
-    if (existsSync(p)) {
-      const d = JSON.parse(readFileSync(p, "utf-8"));
-      if (d.sessionId === sid) return d;
+    if (existsSync(CACHE_PATH)) return JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
+  } catch {
+  }
+  return null;
+}
+function saveCache(cache) {
+  try {
+    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(CACHE_PATH, JSON.stringify(cache));
+  } catch {
+  }
+}
+function computeCost(transcriptPath, fallbackModel) {
+  if (!transcriptPath) return 0;
+  let fileSize;
+  try {
+    fileSize = statSync(transcriptPath).size;
+  } catch {
+    return 0;
+  }
+  const cache = loadCache();
+  if (cache && cache.sessionId === transcriptPath && fileSize === cache.fileSize) {
+    return cache.totalCost;
+  }
+  let offset = 0;
+  let cost = 0;
+  if (cache && cache.sessionId === transcriptPath && fileSize > cache.fileSize) {
+    offset = cache.fileSize;
+    cost = cache.totalCost;
+  }
+  const len = fileSize - offset;
+  if (len <= 0) return cost;
+  try {
+    const buf = Buffer.alloc(len);
+    const fd = openSync(transcriptPath, "r");
+    readSync(fd, buf, 0, len, offset);
+    closeSync(fd);
+    for (const line of buf.toString("utf-8").split("\n")) {
+      if (!line.includes('"usage"')) continue;
+      try {
+        const entry = JSON.parse(line);
+        const u = entry.message?.usage;
+        if (!u) continue;
+        const p = getModelPricing(entry.message.model ?? fallbackModel);
+        if (!p) continue;
+        cost += (u.input_tokens ?? 0) / 1e6 * p.input + (u.output_tokens ?? 0) / 1e6 * p.output + (u.cache_read_input_tokens ?? 0) / 1e6 * p.cacheRead + (u.cache_creation_input_tokens ?? 0) / 1e6 * p.cacheCreation;
+      } catch {
+      }
     }
   } catch {
+    return cache?.totalCost ?? 0;
   }
-  return { sessionCost: 0, sessionId: sid };
-}
-function saveCostCache(cache) {
-  try {
-    const dir = join(homedir(), ".tokenscore");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, ".cost-cache.json"), JSON.stringify(cache));
-  } catch {
-  }
+  saveCache({ sessionId: transcriptPath, totalCost: cost, fileSize });
+  return cost;
 }
 async function main() {
   if (process.stdin.isTTY) return;
   const timeout = setTimeout(() => process.exit(0), 200);
   const chunks = [];
   process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk);
-  }
+  for await (const chunk of process.stdin) chunks.push(chunk);
   clearTimeout(timeout);
   const raw = chunks.join("");
   if (!raw.trim()) return;
@@ -159,7 +177,6 @@ async function main() {
   } catch {
     return;
   }
-  const config = loadConfig();
   const lines = [];
   const modelId = stdin.model?.id ?? "unknown";
   const modelName = stdin.model?.display_name ?? extractModelFamily(modelId);
@@ -173,42 +190,29 @@ async function main() {
   const tier = getModelTier(modelId);
   const badge = tier === "S" ? c.bMagenta(`[${tier}]`) : tier === "A" ? c.bGreen(`[${tier}]`) : tier === "B" ? c.blue(`[${tier}]`) : c.gray(`[${tier}]`);
   let line1 = `${badge} ${c.bold(modelName)} ${bar(usedPct)} ${usedPct}%`;
-  if (config.showTokenBreakdown && usedPct > 50) {
+  if (usedPct > 50) {
     line1 += c.dim(` (in:${fmtTok(inTok)} out:${fmtTok(outTok)} cache:${fmtTok(cacheRd)})`);
   }
   lines.push(line1);
-  if (config.showCost) {
-    let costNow = stdin.cost?.total_cost_usd ?? 0;
-    if (costNow === 0 && totalTok > 0) {
-      const pricing = getModelPricing(modelId);
-      if (pricing) {
-        costNow = inTok / 1e6 * pricing.input + outTok / 1e6 * pricing.output + cacheRd / 1e6 * pricing.cacheRead + cacheCr / 1e6 * pricing.cacheCreation;
-      }
-    }
-    const sid = stdin.transcript_path ?? "";
-    const cc = loadCostCache(sid);
-    if (costNow > cc.sessionCost) {
-      cc.sessionCost = costNow;
-      saveCostCache(cc);
-    }
-    const costFn = costNow >= config.costWarningThreshold ? c.bRed : costNow >= config.costWarningThreshold * 0.5 ? c.bYellow : c.green;
-    let costLine = `  $ ${costFn(fmtCost(costNow))}`;
-    if (totalTok > 0) {
-      costLine += c.dim(` | cache ${Math.round(cacheRd / totalTok * 100)}%`);
-    }
-    if (config.showScore) {
-      costLine += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
-    }
-    lines.push(costLine);
+  let costNow = computeCost(stdin.transcript_path ?? "", modelId);
+  if (costNow === 0) {
+    costNow = stdin.cost?.total_cost_usd ?? 0;
   }
-  if (config.showRateLimit && stdin.rate_limits) {
+  const costFn = costNow >= COST_WARN ? c.bRed : costNow >= COST_WARN * 0.5 ? c.bYellow : c.green;
+  let line2 = `  $ ${costFn(fmtCost(costNow))}`;
+  if (totalTok > 0) {
+    line2 += c.dim(` | cache ${Math.round(cacheRd / totalTok * 100)}%`);
+  }
+  line2 += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
+  lines.push(line2);
+  if (stdin.rate_limits) {
     const fh = stdin.rate_limits.five_hour;
     if (fh && typeof fh.used_percentage === "number") {
       const p = Math.round(fh.used_percentage);
       let rl = `  5h ${bar(p, 8)} ${p}%`;
       if (fh.resets_at) {
         const left = fh.resets_at - Math.floor(Date.now() / 1e3);
-        if (left > 0) rl += c.dim(` ~${fmtDuration(left)}`);
+        if (left > 0) rl += c.dim(` ~${fmtDur(left)}`);
       }
       const sd = stdin.rate_limits.seven_day;
       if (sd && typeof sd.used_percentage === "number" && sd.used_percentage > 50) {
@@ -224,7 +228,6 @@ function extractModelFamily(modelId) {
   if (parts[0] === "claude" && parts.length >= 3) {
     return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
   }
-  if (parts[0] === "gpt") return modelId;
   return modelId;
 }
 main().catch(() => {

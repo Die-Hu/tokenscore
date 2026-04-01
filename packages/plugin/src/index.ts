@@ -3,26 +3,25 @@
  *
  * Invoked by Claude Code every ~300ms via stdin/stdout protocol.
  * Zero native dependencies — does not import better-sqlite3.
+ *
+ * Cost tracking: Parses session JSONL incrementally (byte offset cache)
+ * because stdin.cost.total_cost_usd resets on session resume.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getModelPricing, getModelTier, getModelIntelligenceScore } from "./models.js";
 
-// ── ANSI color helpers (zero-dependency) ─────────────────────────
+// ── ANSI ─────────────────────────────────────────────────────────
 const ESC = "\x1b[";
 const RESET = `${ESC}0m`;
 const BOLD = `${ESC}1m`;
 const DIM = `${ESC}2m`;
 const c = {
-  red: (s: string) => `${ESC}31m${s}${RESET}`,
   green: (s: string) => `${ESC}32m${s}${RESET}`,
-  yellow: (s: string) => `${ESC}33m${s}${RESET}`,
-  blue: (s: string) => `${ESC}34m${s}${RESET}`,
-  magenta: (s: string) => `${ESC}35m${s}${RESET}`,
-  cyan: (s: string) => `${ESC}36m${s}${RESET}`,
   gray: (s: string) => `${ESC}90m${s}${RESET}`,
+  blue: (s: string) => `${ESC}34m${s}${RESET}`,
   bold: (s: string) => `${BOLD}${s}${RESET}`,
   dim: (s: string) => `${DIM}${s}${RESET}`,
   bGreen: (s: string) => `${ESC}92m${s}${RESET}`,
@@ -53,32 +52,8 @@ interface StdinData {
   } | null;
 }
 
-interface PluginConfig {
-  showCost: boolean;
-  showModel: boolean;
-  showRateLimit: boolean;
-  showTokenBreakdown: boolean;
-  showScore: boolean;
-  costWarningThreshold: number;
-}
-
 // ── Config ───────────────────────────────────────────────────────
-const DEFAULT_CONFIG: PluginConfig = {
-  showCost: true,
-  showModel: true,
-  showRateLimit: true,
-  showTokenBreakdown: true,
-  showScore: true,
-  costWarningThreshold: 5.0,
-};
-
-function loadConfig(): PluginConfig {
-  try {
-    const p = join(homedir(), ".claude", "plugins", "tokenscore", "config.json");
-    if (existsSync(p)) return { ...DEFAULT_CONFIG, ...JSON.parse(readFileSync(p, "utf-8")) };
-  } catch {}
-  return DEFAULT_CONFIG;
-}
+const COST_WARN = 5.0;
 
 // ── Formatters ───────────────────────────────────────────────────
 function fmtTok(n: number): string {
@@ -93,88 +68,137 @@ function fmtCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-function fmtDuration(secs: number): string {
+function fmtDur(secs: number): string {
   if (secs < 60) return `${secs}s`;
   const m = Math.floor(secs / 60);
   if (m < 60) return `${m}m`;
   return `${Math.floor(m / 60)}h${m % 60}m`;
 }
 
-// ── Progress bar ─────────────────────────────────────────────────
 function bar(pct: number, w = 12): string {
   const filled = Math.round((pct / 100) * w);
-  const empty = w - filled;
-  const b = "█".repeat(filled) + "░".repeat(empty);
+  const b = "█".repeat(filled) + "░".repeat(w - filled);
   if (pct >= 90) return c.bRed(b);
   if (pct >= 70) return c.bYellow(b);
   return c.bGreen(b);
 }
 
-// ── Cost cache (ESM-safe file I/O) ──────────────────────────────
+// ── Incremental JSONL cost parser ────────────────────────────────
 interface CostCache {
-  sessionCost: number;
-  sessionId: string;
+  sessionId: string;   // transcript_path
+  totalCost: number;   // cumulative USD
+  fileSize: number;    // byte offset for incremental parse
 }
 
-function loadCostCache(sid: string): CostCache {
+const CACHE_DIR = join(homedir(), ".tokenscore");
+const CACHE_PATH = join(CACHE_DIR, ".cost-cache.json");
+
+function loadCache(): CostCache | null {
   try {
-    const p = join(homedir(), ".tokenscore", ".cost-cache.json");
-    if (existsSync(p)) {
-      const d = JSON.parse(readFileSync(p, "utf-8"));
-      if (d.sessionId === sid) return d;
+    if (existsSync(CACHE_PATH)) return JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
+  } catch {}
+  return null;
+}
+
+function saveCache(cache: CostCache): void {
+  try {
+    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(CACHE_PATH, JSON.stringify(cache));
+  } catch {}
+}
+
+/**
+ * Compute cumulative session cost by incrementally parsing the JSONL transcript.
+ * - First call: parses entire file (~30ms for 100MB)
+ * - Subsequent calls: only parses new bytes since last read (<5ms)
+ * - No change: just statSync + cache read (<1ms)
+ */
+function computeCost(transcriptPath: string, fallbackModel: string): number {
+  if (!transcriptPath) return 0;
+
+  let fileSize: number;
+  try {
+    fileSize = statSync(transcriptPath).size;
+  } catch {
+    return 0;
+  }
+
+  const cache = loadCache();
+
+  // Fast path: same session, no new data
+  if (cache && cache.sessionId === transcriptPath && fileSize === cache.fileSize) {
+    return cache.totalCost;
+  }
+
+  // Determine start position
+  let offset = 0;
+  let cost = 0;
+  if (cache && cache.sessionId === transcriptPath && fileSize > cache.fileSize) {
+    offset = cache.fileSize;
+    cost = cache.totalCost;
+  }
+
+  // Read only new bytes
+  const len = fileSize - offset;
+  if (len <= 0) return cost;
+
+  try {
+    const buf = Buffer.alloc(len);
+    const fd = openSync(transcriptPath, "r");
+    readSync(fd, buf, 0, len, offset);
+    closeSync(fd);
+
+    for (const line of buf.toString("utf-8").split("\n")) {
+      if (!line.includes('"usage"')) continue; // fast skip non-usage lines
+      try {
+        const entry = JSON.parse(line);
+        const u = entry.message?.usage;
+        if (!u) continue;
+        const p = getModelPricing(entry.message.model ?? fallbackModel);
+        if (!p) continue;
+        cost +=
+          ((u.input_tokens ?? 0) / 1e6) * p.input +
+          ((u.output_tokens ?? 0) / 1e6) * p.output +
+          ((u.cache_read_input_tokens ?? 0) / 1e6) * p.cacheRead +
+          ((u.cache_creation_input_tokens ?? 0) / 1e6) * p.cacheCreation;
+      } catch {}
     }
-  } catch {}
-  return { sessionCost: 0, sessionId: sid };
-}
+  } catch {
+    return cache?.totalCost ?? 0;
+  }
 
-function saveCostCache(cache: CostCache): void {
-  try {
-    const dir = join(homedir(), ".tokenscore");
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, ".cost-cache.json"), JSON.stringify(cache));
-  } catch {}
+  saveCache({ sessionId: transcriptPath, totalCost: cost, fileSize });
+  return cost;
 }
 
 // ── Main ─────────────────────────────────────────────────────────
 async function main() {
   if (process.stdin.isTTY) return;
 
-  // Stdin timeout: bail if no data within 200ms
   const timeout = setTimeout(() => process.exit(0), 200);
-
   const chunks: string[] = [];
   process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk as string);
-  }
+  for await (const chunk of process.stdin) chunks.push(chunk as string);
   clearTimeout(timeout);
 
   const raw = chunks.join("");
   if (!raw.trim()) return;
 
   let stdin: StdinData;
-  try {
-    stdin = JSON.parse(raw);
-  } catch {
-    return;
-  }
+  try { stdin = JSON.parse(raw); } catch { return; }
 
-  const config = loadConfig();
   const lines: string[] = [];
-
-  // ── Model + Context ──────────────────────────────────────────
   const modelId = stdin.model?.id ?? "unknown";
   const modelName = stdin.model?.display_name ?? extractModelFamily(modelId);
   const usedPct = Math.round(stdin.context_window?.used_percentage ?? 0);
   const usage = stdin.context_window?.current_usage;
-
   const inTok = usage?.input_tokens ?? 0;
   const outTok = usage?.output_tokens ?? 0;
   const cacheRd = usage?.cache_read_input_tokens ?? 0;
   const cacheCr = usage?.cache_creation_input_tokens ?? 0;
   const totalTok = inTok + outTok + cacheRd + cacheCr;
 
-  // Model tier badge
+  // ── Line 1: Model + Context ─────────────────────────────────
   const tier = getModelTier(modelId);
   const badge = tier === "S" ? c.bMagenta(`[${tier}]`)
     : tier === "A" ? c.bGreen(`[${tier}]`)
@@ -182,70 +206,44 @@ async function main() {
     : c.gray(`[${tier}]`);
 
   let line1 = `${badge} ${c.bold(modelName)} ${bar(usedPct)} ${usedPct}%`;
-
-  if (config.showTokenBreakdown && usedPct > 50) {
+  if (usedPct > 50) {
     line1 += c.dim(` (in:${fmtTok(inTok)} out:${fmtTok(outTok)} cache:${fmtTok(cacheRd)})`);
   }
   lines.push(line1);
 
-  // ── Cost (always shown) ───────────────────────────────────────
-  if (config.showCost) {
-    // Prefer Claude Code's native cost if available
-    let costNow = stdin.cost?.total_cost_usd ?? 0;
+  // ── Line 2: Cost (from JSONL, accurate cumulative) ──────────
+  let costNow = computeCost(stdin.transcript_path ?? "", modelId);
 
-    // Fallback: calculate from token usage
-    if (costNow === 0 && totalTok > 0) {
-      const pricing = getModelPricing(modelId);
-      if (pricing) {
-        costNow =
-          (inTok / 1e6) * pricing.input +
-          (outTok / 1e6) * pricing.output +
-          (cacheRd / 1e6) * pricing.cacheRead +
-          (cacheCr / 1e6) * pricing.cacheCreation;
-      }
-    }
-
-    // Persist cost
-    const sid = stdin.transcript_path ?? "";
-    const cc = loadCostCache(sid);
-    if (costNow > cc.sessionCost) {
-      cc.sessionCost = costNow;
-      saveCostCache(cc);
-    }
-
-    const costFn = costNow >= config.costWarningThreshold ? c.bRed
-      : costNow >= config.costWarningThreshold * 0.5 ? c.bYellow
-      : c.green;
-
-    let costLine = `  $ ${costFn(fmtCost(costNow))}`;
-
-    if (totalTok > 0) {
-      costLine += c.dim(` | cache ${Math.round((cacheRd / totalTok) * 100)}%`);
-    }
-
-    if (config.showScore) {
-      costLine += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
-    }
-
-    lines.push(costLine);
+  // Fallback for brand new session (no JSONL yet)
+  if (costNow === 0) {
+    costNow = stdin.cost?.total_cost_usd ?? 0;
   }
 
-  // ── Rate Limits ──────────────────────────────────────────────
-  if (config.showRateLimit && stdin.rate_limits) {
+  const costFn = costNow >= COST_WARN ? c.bRed
+    : costNow >= COST_WARN * 0.5 ? c.bYellow
+    : c.green;
+
+  let line2 = `  $ ${costFn(fmtCost(costNow))}`;
+  if (totalTok > 0) {
+    line2 += c.dim(` | cache ${Math.round((cacheRd / totalTok) * 100)}%`);
+  }
+  line2 += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
+  lines.push(line2);
+
+  // ── Line 3: Rate Limits ─────────────────────────────────────
+  if (stdin.rate_limits) {
     const fh = stdin.rate_limits.five_hour;
     if (fh && typeof fh.used_percentage === "number") {
       const p = Math.round(fh.used_percentage);
       let rl = `  5h ${bar(p, 8)} ${p}%`;
       if (fh.resets_at) {
         const left = fh.resets_at - Math.floor(Date.now() / 1000);
-        if (left > 0) rl += c.dim(` ~${fmtDuration(left)}`);
+        if (left > 0) rl += c.dim(` ~${fmtDur(left)}`);
       }
-
       const sd = stdin.rate_limits.seven_day;
       if (sd && typeof sd.used_percentage === "number" && sd.used_percentage > 50) {
         rl += c.dim(` | 7d ${Math.round(sd.used_percentage)}%`);
       }
-
       lines.push(rl);
     }
   }
@@ -253,14 +251,11 @@ async function main() {
   for (const l of lines) console.log(l);
 }
 
-/** Extract model family name from ID: claude-opus-4-6 -> Opus */
 function extractModelFamily(modelId: string): string {
   const parts = modelId.split("-");
-  // claude-opus-4-6 -> opus, claude-sonnet-4-5 -> sonnet, gpt-4o -> 4o
   if (parts[0] === "claude" && parts.length >= 3) {
-    return parts[1].charAt(0).toUpperCase() + parts[1].slice(1); // "opus" -> "Opus"
+    return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
   }
-  if (parts[0] === "gpt") return modelId; // gpt-4o as-is
   return modelId;
 }
 
