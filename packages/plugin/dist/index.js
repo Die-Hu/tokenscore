@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/index.ts
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, openSync, readSync, closeSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -64,29 +64,26 @@ function getModelIntelligenceScore(modelId) {
 }
 
 // src/index.ts
-var ESC = "\x1B[";
-var RESET = `${ESC}0m`;
-var BOLD = `${ESC}1m`;
-var DIM = `${ESC}2m`;
+var E = "\x1B[";
+var R = `${E}0m`;
 var c = {
-  green: (s) => `${ESC}32m${s}${RESET}`,
-  gray: (s) => `${ESC}90m${s}${RESET}`,
-  blue: (s) => `${ESC}34m${s}${RESET}`,
-  bold: (s) => `${BOLD}${s}${RESET}`,
-  dim: (s) => `${DIM}${s}${RESET}`,
-  bGreen: (s) => `${ESC}92m${s}${RESET}`,
-  bYellow: (s) => `${ESC}93m${s}${RESET}`,
-  bRed: (s) => `${ESC}91m${s}${RESET}`,
-  bMagenta: (s) => `${ESC}95m${s}${RESET}`
+  bold: (s) => `${E}1m${s}${R}`,
+  dim: (s) => `${E}2m${s}${R}`,
+  green: (s) => `${E}32m${s}${R}`,
+  blue: (s) => `${E}34m${s}${R}`,
+  gray: (s) => `${E}90m${s}${R}`,
+  bGreen: (s) => `${E}92m${s}${R}`,
+  bYellow: (s) => `${E}93m${s}${R}`,
+  bRed: (s) => `${E}91m${s}${R}`,
+  bMagenta: (s) => `${E}95m${s}${R}`
 };
-var COST_WARN = 5;
 function fmtTok(n) {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
   return String(n);
 }
 function fmtCost(usd) {
-  if (usd < 0.01) return "<$0.01";
+  if (usd < 1e-3) return "$0.000";
   if (usd < 1) return `$${usd.toFixed(3)}`;
   return `$${usd.toFixed(2)}`;
 }
@@ -96,7 +93,7 @@ function fmtDur(secs) {
   if (m < 60) return `${m}m`;
   return `${Math.floor(m / 60)}h${m % 60}m`;
 }
-function bar(pct, w = 12) {
+function bar(pct, w = 8) {
   const filled = Math.round(pct / 100 * w);
   const b = "\u2588".repeat(filled) + "\u2591".repeat(w - filled);
   if (pct >= 90) return c.bRed(b);
@@ -105,131 +102,143 @@ function bar(pct, w = 12) {
 }
 var CACHE_DIR = join(homedir(), ".tokenscore");
 var CACHE_PATH = join(CACHE_DIR, ".cost-cache.json");
+var USAGE_NEEDLE = Buffer.from('"usage"');
+var NL = 10;
 function loadCache() {
   try {
-    if (existsSync(CACHE_PATH)) return JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
+    return JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
   } catch {
-  }
-  return null;
-}
-function saveCache(cache) {
-  try {
-    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(CACHE_PATH, JSON.stringify(cache));
-  } catch {
+    return null;
   }
 }
-function computeCost(transcriptPath, fallbackModel) {
-  if (!transcriptPath) return 0;
-  let fileSize;
+function saveCache(cc) {
   try {
-    fileSize = statSync(transcriptPath).size;
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(CACHE_PATH, JSON.stringify(cc));
+  } catch {
+  }
+}
+function computeCost(tp, fallbackModel) {
+  if (!tp) return 0;
+  let sz;
+  try {
+    sz = statSync(tp).size;
   } catch {
     return 0;
   }
-  const cache = loadCache();
-  if (cache && cache.sessionId === transcriptPath && fileSize === cache.fileSize) {
-    return cache.totalCost;
-  }
+  const cc = loadCache();
+  if (cc && cc.sid === tp && sz === cc.sz) return cc.cost;
   let offset = 0;
   let cost = 0;
-  if (cache && cache.sessionId === transcriptPath && fileSize > cache.fileSize) {
-    offset = cache.fileSize;
-    cost = cache.totalCost;
+  if (cc && cc.sid === tp && sz > cc.sz) {
+    offset = cc.sz;
+    cost = cc.cost;
   }
-  const len = fileSize - offset;
+  const len = sz - offset;
   if (len <= 0) return cost;
   try {
-    const buf = Buffer.alloc(len);
-    const fd = openSync(transcriptPath, "r");
+    const buf = Buffer.allocUnsafe(len);
+    const fd = openSync(tp, "r");
     readSync(fd, buf, 0, len, offset);
     closeSync(fd);
-    for (const line of buf.toString("utf-8").split("\n")) {
-      if (!line.includes('"usage"')) continue;
+    let pos = 0;
+    while (pos < len) {
+      const idx = buf.indexOf(USAGE_NEEDLE, pos);
+      if (idx === -1) break;
+      let ls = idx;
+      while (ls > 0 && buf[ls - 1] !== NL) ls--;
+      let le = idx;
+      while (le < len && buf[le] !== NL) le++;
       try {
-        const entry = JSON.parse(line);
+        const entry = JSON.parse(buf.toString("utf-8", ls, le));
         const u = entry.message?.usage;
-        if (!u) continue;
-        const p = getModelPricing(entry.message.model ?? fallbackModel);
-        if (!p) continue;
-        cost += (u.input_tokens ?? 0) / 1e6 * p.input + (u.output_tokens ?? 0) / 1e6 * p.output + (u.cache_read_input_tokens ?? 0) / 1e6 * p.cacheRead + (u.cache_creation_input_tokens ?? 0) / 1e6 * p.cacheCreation;
+        if (u) {
+          const p = getModelPricing(entry.message.model ?? fallbackModel);
+          if (p) {
+            cost += (u.input_tokens ?? 0) / 1e6 * p.input + (u.output_tokens ?? 0) / 1e6 * p.output + (u.cache_read_input_tokens ?? 0) / 1e6 * p.cacheRead + (u.cache_creation_input_tokens ?? 0) / 1e6 * p.cacheCreation;
+          }
+        }
       } catch {
       }
+      pos = le + 1;
     }
   } catch {
-    return cache?.totalCost ?? 0;
+    return cc?.cost ?? 0;
   }
-  saveCache({ sessionId: transcriptPath, totalCost: cost, fileSize });
+  saveCache({ sid: tp, cost, sz });
   return cost;
 }
-async function main() {
+function main() {
   if (process.stdin.isTTY) return;
-  const timeout = setTimeout(() => process.exit(0), 200);
-  const chunks = [];
-  process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  clearTimeout(timeout);
-  const raw = chunks.join("");
-  if (!raw.trim()) return;
-  let stdin;
+  let raw;
   try {
-    stdin = JSON.parse(raw);
+    raw = readFileSync(0, "utf-8");
+  } catch {
+    return;
+  }
+  if (!raw.trim()) return;
+  let d;
+  try {
+    d = JSON.parse(raw);
   } catch {
     return;
   }
   const lines = [];
-  const modelId = stdin.model?.id ?? "unknown";
-  const modelName = stdin.model?.display_name ?? extractModelFamily(modelId);
-  const usedPct = Math.round(stdin.context_window?.used_percentage ?? 0);
-  const usage = stdin.context_window?.current_usage;
-  const inTok = usage?.input_tokens ?? 0;
-  const outTok = usage?.output_tokens ?? 0;
-  const cacheRd = usage?.cache_read_input_tokens ?? 0;
-  const cacheCr = usage?.cache_creation_input_tokens ?? 0;
+  const mid = d.model?.id ?? "unknown";
+  const mname = d.model?.display_name ?? extractFamily(mid);
+  const pct = Math.round(d.context_window?.used_percentage ?? 0);
+  const u = d.context_window?.current_usage;
+  const inTok = u?.input_tokens ?? 0;
+  const outTok = u?.output_tokens ?? 0;
+  const cacheRd = u?.cache_read_input_tokens ?? 0;
+  const cacheCr = u?.cache_creation_input_tokens ?? 0;
   const totalTok = inTok + outTok + cacheRd + cacheCr;
-  const tier = getModelTier(modelId);
+  const tier = getModelTier(mid);
   const badge = tier === "S" ? c.bMagenta(`[${tier}]`) : tier === "A" ? c.bGreen(`[${tier}]`) : tier === "B" ? c.blue(`[${tier}]`) : c.gray(`[${tier}]`);
-  let line1 = `${badge} ${c.bold(modelName)} ${bar(usedPct)} ${usedPct}%`;
-  if (usedPct > 50) {
-    line1 += c.dim(` (in:${fmtTok(inTok)} out:${fmtTok(outTok)} cache:${fmtTok(cacheRd)})`);
+  let l1 = `${badge} ${c.bold(mname)} ${c.gray(`${pct}%`)}`;
+  if (pct > 50) {
+    l1 += c.dim(` (in:${fmtTok(inTok)} out:${fmtTok(outTok)} cache:${fmtTok(cacheRd)})`);
   }
-  lines.push(line1);
-  let costNow = computeCost(stdin.transcript_path ?? "", modelId);
-  if (costNow === 0) {
-    costNow = stdin.cost?.total_cost_usd ?? 0;
-  }
-  const costFn = costNow >= COST_WARN ? c.bRed : costNow >= COST_WARN * 0.5 ? c.bYellow : c.green;
-  let line2 = `  $ ${costFn(fmtCost(costNow))}`;
+  lines.push(l1);
+  let sessionCost = computeCost(d.transcript_path ?? "", mid);
+  if (sessionCost === 0) sessionCost = d.cost?.total_cost_usd ?? 0;
+  const costFn = sessionCost >= 5 ? c.bRed : sessionCost >= 2.5 ? c.bYellow : c.green;
+  let l2 = `  $ ${costFn(fmtCost(sessionCost))}`;
   if (totalTok > 0) {
-    line2 += c.dim(` | cache ${Math.round(cacheRd / totalTok * 100)}%`);
+    l2 += c.dim(` | cache ${Math.round(cacheRd / totalTok * 100)}%`);
   }
-  line2 += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
-  lines.push(line2);
-  if (stdin.rate_limits) {
-    const fh = stdin.rate_limits.five_hour;
+  l2 += c.dim(` | IQ ${getModelIntelligenceScore(mid)}`);
+  lines.push(l2);
+  if (d.rate_limits) {
+    const parts = [];
+    const fh = d.rate_limits.five_hour;
     if (fh && typeof fh.used_percentage === "number") {
       const p = Math.round(fh.used_percentage);
-      let rl = `  5h ${bar(p, 8)} ${p}%`;
+      let s = `5h ${bar(p)} ${p}%`;
       if (fh.resets_at) {
         const left = fh.resets_at - Math.floor(Date.now() / 1e3);
-        if (left > 0) rl += c.dim(` ~${fmtDur(left)}`);
+        if (left > 0) s += c.dim(` ~${fmtDur(left)}`);
       }
-      const sd = stdin.rate_limits.seven_day;
-      if (sd && typeof sd.used_percentage === "number" && sd.used_percentage > 50) {
-        rl += c.dim(` | 7d ${Math.round(sd.used_percentage)}%`);
-      }
-      lines.push(rl);
+      parts.push(s);
     }
+    const sd = d.rate_limits.seven_day;
+    if (sd && typeof sd.used_percentage === "number") {
+      const p7 = Math.round(sd.used_percentage);
+      let s7 = `7d ${bar(p7, 6)} ${p7}%`;
+      if (sd.resets_at) {
+        const left7 = sd.resets_at - Math.floor(Date.now() / 1e3);
+        if (left7 > 0) s7 += c.dim(` ~${fmtDur(left7)}`);
+      }
+      parts.push(s7);
+    }
+    if (parts.length > 0) lines.push(`  ${parts.join("  ")}`);
   }
   for (const l of lines) console.log(l);
 }
-function extractModelFamily(modelId) {
-  const parts = modelId.split("-");
-  if (parts[0] === "claude" && parts.length >= 3) {
-    return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
-  }
-  return modelId;
+function extractFamily(mid) {
+  const p = mid.split("-");
+  if (p[0] === "claude" && p.length >= 3) return p[1].charAt(0).toUpperCase() + p[1].slice(1);
+  return mid;
 }
-main().catch(() => {
-});
+main();
 //# sourceMappingURL=index.js.map

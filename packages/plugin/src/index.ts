@@ -1,47 +1,36 @@
 /**
  * TokenScore — Claude Code Statusline Plugin
- *
- * Invoked by Claude Code every ~300ms via stdin/stdout protocol.
- * Zero native dependencies — does not import better-sqlite3.
- *
- * Cost tracking: Parses session JSONL incrementally (byte offset cache)
- * because stdin.cost.total_cost_usd resets on session resume.
+ * Zero native dependencies. Cumulative cost via incremental JSONL parsing.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, statSync, openSync, readSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { getModelPricing, getModelTier, getModelIntelligenceScore } from "./models.js";
 
 // ── ANSI ─────────────────────────────────────────────────────────
-const ESC = "\x1b[";
-const RESET = `${ESC}0m`;
-const BOLD = `${ESC}1m`;
-const DIM = `${ESC}2m`;
+const E = "\x1b[";
+const R = `${E}0m`;
 const c = {
-  green: (s: string) => `${ESC}32m${s}${RESET}`,
-  gray: (s: string) => `${ESC}90m${s}${RESET}`,
-  blue: (s: string) => `${ESC}34m${s}${RESET}`,
-  bold: (s: string) => `${BOLD}${s}${RESET}`,
-  dim: (s: string) => `${DIM}${s}${RESET}`,
-  bGreen: (s: string) => `${ESC}92m${s}${RESET}`,
-  bYellow: (s: string) => `${ESC}93m${s}${RESET}`,
-  bRed: (s: string) => `${ESC}91m${s}${RESET}`,
-  bMagenta: (s: string) => `${ESC}95m${s}${RESET}`,
+  bold: (s: string) => `${E}1m${s}${R}`,
+  dim: (s: string) => `${E}2m${s}${R}`,
+  green: (s: string) => `${E}32m${s}${R}`,
+  blue: (s: string) => `${E}34m${s}${R}`,
+  gray: (s: string) => `${E}90m${s}${R}`,
+  bGreen: (s: string) => `${E}92m${s}${R}`,
+  bYellow: (s: string) => `${E}93m${s}${R}`,
+  bRed: (s: string) => `${E}91m${s}${R}`,
+  bMagenta: (s: string) => `${E}95m${s}${R}`,
 };
 
 // ── Types ────────────────────────────────────────────────────────
 interface StdinData {
   transcript_path?: string;
-  cwd?: string;
   model?: { id?: string; display_name?: string };
   context_window?: {
-    context_window_size?: number;
     current_usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
+      input_tokens?: number; output_tokens?: number;
+      cache_creation_input_tokens?: number; cache_read_input_tokens?: number;
     } | null;
     used_percentage?: number | null;
   };
@@ -52,9 +41,6 @@ interface StdinData {
   } | null;
 }
 
-// ── Config ───────────────────────────────────────────────────────
-const COST_WARN = 5.0;
-
 // ── Formatters ───────────────────────────────────────────────────
 function fmtTok(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
@@ -63,7 +49,7 @@ function fmtTok(n: number): string {
 }
 
 function fmtCost(usd: number): string {
-  if (usd < 0.01) return "<$0.01";
+  if (usd < 0.001) return "$0.000";
   if (usd < 1) return `$${usd.toFixed(3)}`;
   return `$${usd.toFixed(2)}`;
 }
@@ -75,7 +61,7 @@ function fmtDur(secs: number): string {
   return `${Math.floor(m / 60)}h${m % 60}m`;
 }
 
-function bar(pct: number, w = 12): string {
+function bar(pct: number, w = 8): string {
   const filled = Math.round((pct / 100) * w);
   const b = "█".repeat(filled) + "░".repeat(w - filled);
   if (pct >= 90) return c.bRed(b);
@@ -85,178 +71,172 @@ function bar(pct: number, w = 12): string {
 
 // ── Incremental JSONL cost parser ────────────────────────────────
 interface CostCache {
-  sessionId: string;   // transcript_path
-  totalCost: number;   // cumulative USD
-  fileSize: number;    // byte offset for incremental parse
+  sid: string;    // transcript_path
+  cost: number;   // cumulative USD
+  sz: number;     // file byte offset
 }
 
 const CACHE_DIR = join(homedir(), ".tokenscore");
 const CACHE_PATH = join(CACHE_DIR, ".cost-cache.json");
+const USAGE_NEEDLE = Buffer.from('"usage"');
+const NL = 0x0A;
 
 function loadCache(): CostCache | null {
-  try {
-    if (existsSync(CACHE_PATH)) return JSON.parse(readFileSync(CACHE_PATH, "utf-8"));
-  } catch {}
-  return null;
+  try { return JSON.parse(readFileSync(CACHE_PATH, "utf-8")); } catch { return null; }
 }
 
-function saveCache(cache: CostCache): void {
+function saveCache(cc: CostCache): void {
   try {
-    if (!existsSync(CACHE_DIR)) mkdirSync(CACHE_DIR, { recursive: true });
-    writeFileSync(CACHE_PATH, JSON.stringify(cache));
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(CACHE_PATH, JSON.stringify(cc));
   } catch {}
 }
 
-/**
- * Compute cumulative session cost by incrementally parsing the JSONL transcript.
- * - First call: parses entire file (~30ms for 100MB)
- * - Subsequent calls: only parses new bytes since last read (<5ms)
- * - No change: just statSync + cache read (<1ms)
- */
-function computeCost(transcriptPath: string, fallbackModel: string): number {
-  if (!transcriptPath) return 0;
+function computeCost(tp: string, fallbackModel: string): number {
+  if (!tp) return 0;
 
-  let fileSize: number;
-  try {
-    fileSize = statSync(transcriptPath).size;
-  } catch {
-    return 0;
-  }
+  let sz: number;
+  try { sz = statSync(tp).size; } catch { return 0; }
 
-  const cache = loadCache();
+  const cc = loadCache();
 
   // Fast path: same session, no new data
-  if (cache && cache.sessionId === transcriptPath && fileSize === cache.fileSize) {
-    return cache.totalCost;
-  }
+  if (cc && cc.sid === tp && sz === cc.sz) return cc.cost;
 
-  // Determine start position
   let offset = 0;
   let cost = 0;
-  if (cache && cache.sessionId === transcriptPath && fileSize > cache.fileSize) {
-    offset = cache.fileSize;
-    cost = cache.totalCost;
+  if (cc && cc.sid === tp && sz > cc.sz) {
+    offset = cc.sz;
+    cost = cc.cost;
   }
 
-  // Read only new bytes
-  const len = fileSize - offset;
+  const len = sz - offset;
   if (len <= 0) return cost;
 
   try {
-    const buf = Buffer.alloc(len);
-    const fd = openSync(transcriptPath, "r");
+    const buf = Buffer.allocUnsafe(len);
+    const fd = openSync(tp, "r");
     readSync(fd, buf, 0, len, offset);
     closeSync(fd);
 
-    for (const line of buf.toString("utf-8").split("\n")) {
-      if (!line.includes('"usage"')) continue; // fast skip non-usage lines
+    // Buffer scan: find "usage" needle, extract only those lines
+    let pos = 0;
+    while (pos < len) {
+      const idx = buf.indexOf(USAGE_NEEDLE, pos);
+      if (idx === -1) break;
+
+      // Find line boundaries
+      let ls = idx;
+      while (ls > 0 && buf[ls - 1] !== NL) ls--;
+      let le = idx;
+      while (le < len && buf[le] !== NL) le++;
+
       try {
-        const entry = JSON.parse(line);
+        const entry = JSON.parse(buf.toString("utf-8", ls, le));
         const u = entry.message?.usage;
-        if (!u) continue;
-        const p = getModelPricing(entry.message.model ?? fallbackModel);
-        if (!p) continue;
-        cost +=
-          ((u.input_tokens ?? 0) / 1e6) * p.input +
-          ((u.output_tokens ?? 0) / 1e6) * p.output +
-          ((u.cache_read_input_tokens ?? 0) / 1e6) * p.cacheRead +
-          ((u.cache_creation_input_tokens ?? 0) / 1e6) * p.cacheCreation;
+        if (u) {
+          const p = getModelPricing(entry.message.model ?? fallbackModel);
+          if (p) {
+            cost +=
+              ((u.input_tokens ?? 0) / 1e6) * p.input +
+              ((u.output_tokens ?? 0) / 1e6) * p.output +
+              ((u.cache_read_input_tokens ?? 0) / 1e6) * p.cacheRead +
+              ((u.cache_creation_input_tokens ?? 0) / 1e6) * p.cacheCreation;
+          }
+        }
       } catch {}
+
+      pos = le + 1;
     }
   } catch {
-    return cache?.totalCost ?? 0;
+    return cc?.cost ?? 0;
   }
 
-  saveCache({ sessionId: transcriptPath, totalCost: cost, fileSize });
+  saveCache({ sid: tp, cost, sz });
   return cost;
 }
 
-// ── Main ─────────────────────────────────────────────────────────
-async function main() {
+// ── Main (fully synchronous for speed) ───────────────────────────
+function main() {
   if (process.stdin.isTTY) return;
 
-  const timeout = setTimeout(() => process.exit(0), 200);
-  const chunks: string[] = [];
-  process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) chunks.push(chunk as string);
-  clearTimeout(timeout);
-
-  const raw = chunks.join("");
+  let raw: string;
+  try { raw = readFileSync(0, "utf-8"); } catch { return; }
   if (!raw.trim()) return;
 
-  let stdin: StdinData;
-  try { stdin = JSON.parse(raw); } catch { return; }
+  let d: StdinData;
+  try { d = JSON.parse(raw); } catch { return; }
 
   const lines: string[] = [];
-  const modelId = stdin.model?.id ?? "unknown";
-  const modelName = stdin.model?.display_name ?? extractModelFamily(modelId);
-  const usedPct = Math.round(stdin.context_window?.used_percentage ?? 0);
-  const usage = stdin.context_window?.current_usage;
-  const inTok = usage?.input_tokens ?? 0;
-  const outTok = usage?.output_tokens ?? 0;
-  const cacheRd = usage?.cache_read_input_tokens ?? 0;
-  const cacheCr = usage?.cache_creation_input_tokens ?? 0;
+  const mid = d.model?.id ?? "unknown";
+  const mname = d.model?.display_name ?? extractFamily(mid);
+  const pct = Math.round(d.context_window?.used_percentage ?? 0);
+  const u = d.context_window?.current_usage;
+  const inTok = u?.input_tokens ?? 0;
+  const outTok = u?.output_tokens ?? 0;
+  const cacheRd = u?.cache_read_input_tokens ?? 0;
+  const cacheCr = u?.cache_creation_input_tokens ?? 0;
   const totalTok = inTok + outTok + cacheRd + cacheCr;
 
-  // ── Line 1: Model + Context ─────────────────────────────────
-  const tier = getModelTier(modelId);
+  // ── Line 1: Model + Context (gray %) ────────────────────────
+  const tier = getModelTier(mid);
   const badge = tier === "S" ? c.bMagenta(`[${tier}]`)
     : tier === "A" ? c.bGreen(`[${tier}]`)
     : tier === "B" ? c.blue(`[${tier}]`)
     : c.gray(`[${tier}]`);
 
-  let line1 = `${badge} ${c.bold(modelName)} ${bar(usedPct)} ${usedPct}%`;
-  if (usedPct > 50) {
-    line1 += c.dim(` (in:${fmtTok(inTok)} out:${fmtTok(outTok)} cache:${fmtTok(cacheRd)})`);
+  let l1 = `${badge} ${c.bold(mname)} ${c.gray(`${pct}%`)}`;
+  if (pct > 50) {
+    l1 += c.dim(` (in:${fmtTok(inTok)} out:${fmtTok(outTok)} cache:${fmtTok(cacheRd)})`);
   }
-  lines.push(line1);
+  lines.push(l1);
 
-  // ── Line 2: Cost (from JSONL, accurate cumulative) ──────────
-  let costNow = computeCost(stdin.transcript_path ?? "", modelId);
+  // ── Line 2: Session cost (cumulative from JSONL) ────────────
+  let sessionCost = computeCost(d.transcript_path ?? "", mid);
+  if (sessionCost === 0) sessionCost = d.cost?.total_cost_usd ?? 0;
 
-  // Fallback for brand new session (no JSONL yet)
-  if (costNow === 0) {
-    costNow = stdin.cost?.total_cost_usd ?? 0;
-  }
+  const costFn = sessionCost >= 5 ? c.bRed : sessionCost >= 2.5 ? c.bYellow : c.green;
 
-  const costFn = costNow >= COST_WARN ? c.bRed
-    : costNow >= COST_WARN * 0.5 ? c.bYellow
-    : c.green;
-
-  let line2 = `  $ ${costFn(fmtCost(costNow))}`;
+  let l2 = `  $ ${costFn(fmtCost(sessionCost))}`;
   if (totalTok > 0) {
-    line2 += c.dim(` | cache ${Math.round((cacheRd / totalTok) * 100)}%`);
+    l2 += c.dim(` | cache ${Math.round((cacheRd / totalTok) * 100)}%`);
   }
-  line2 += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
-  lines.push(line2);
+  l2 += c.dim(` | IQ ${getModelIntelligenceScore(mid)}`);
+  lines.push(l2);
 
-  // ── Line 3: Rate Limits ─────────────────────────────────────
-  if (stdin.rate_limits) {
-    const fh = stdin.rate_limits.five_hour;
+  // ── Line 3: Rate limits (5h + 7d always shown) ─────────────
+  if (d.rate_limits) {
+    const parts: string[] = [];
+    const fh = d.rate_limits.five_hour;
     if (fh && typeof fh.used_percentage === "number") {
       const p = Math.round(fh.used_percentage);
-      let rl = `  5h ${bar(p, 8)} ${p}%`;
+      let s = `5h ${bar(p)} ${p}%`;
       if (fh.resets_at) {
         const left = fh.resets_at - Math.floor(Date.now() / 1000);
-        if (left > 0) rl += c.dim(` ~${fmtDur(left)}`);
+        if (left > 0) s += c.dim(` ~${fmtDur(left)}`);
       }
-      const sd = stdin.rate_limits.seven_day;
-      if (sd && typeof sd.used_percentage === "number" && sd.used_percentage > 50) {
-        rl += c.dim(` | 7d ${Math.round(sd.used_percentage)}%`);
-      }
-      lines.push(rl);
+      parts.push(s);
     }
+    const sd = d.rate_limits.seven_day;
+    if (sd && typeof sd.used_percentage === "number") {
+      const p7 = Math.round(sd.used_percentage);
+      let s7 = `7d ${bar(p7, 6)} ${p7}%`;
+      if (sd.resets_at) {
+        const left7 = sd.resets_at - Math.floor(Date.now() / 1000);
+        if (left7 > 0) s7 += c.dim(` ~${fmtDur(left7)}`);
+      }
+      parts.push(s7);
+    }
+    if (parts.length > 0) lines.push(`  ${parts.join("  ")}`);
   }
 
   for (const l of lines) console.log(l);
 }
 
-function extractModelFamily(modelId: string): string {
-  const parts = modelId.split("-");
-  if (parts[0] === "claude" && parts.length >= 3) {
-    return parts[1].charAt(0).toUpperCase() + parts[1].slice(1);
-  }
-  return modelId;
+function extractFamily(mid: string): string {
+  const p = mid.split("-");
+  if (p[0] === "claude" && p.length >= 3) return p[1].charAt(0).toUpperCase() + p[1].slice(1);
+  return mid;
 }
 
-main().catch(() => {});
+main();
