@@ -112,14 +112,33 @@ export function registerScanCommand(program: Command): void {
           // Ensure project exists
           const project = projectRepo.upsertFromPath(raw.projectPath);
 
-          // Calculate cost with cache token pricing
-          const cost = estimateCost(
-            raw.modelId,
-            raw.tokenUsage.inputTokens,
-            raw.tokenUsage.outputTokens,
-            raw.tokenUsage.cacheReadInputTokens,
-            raw.tokenUsage.cacheCreationInputTokens,
-          );
+          // Calculate per-model costs
+          const modelCosts: Record<string, number> = {};
+          let totalCost = 0;
+          for (const [model, outTok] of Object.entries(raw.modelTokens)) {
+            // Approximate: distribute input/cache proportionally by output tokens
+            const totalOut = raw.tokenUsage.outputTokens || 1;
+            const ratio = outTok / totalOut;
+            const mc = estimateCost(
+              model,
+              Math.round(raw.tokenUsage.inputTokens * ratio),
+              outTok,
+              Math.round(raw.tokenUsage.cacheReadInputTokens * ratio),
+              Math.round(raw.tokenUsage.cacheCreationInputTokens * ratio),
+            );
+            if (mc > 0) modelCosts[model] = Math.round(mc * 1000) / 1000;
+            totalCost += mc;
+          }
+          // Fallback if modelTokens is empty
+          if (Object.keys(modelCosts).length === 0) {
+            totalCost = estimateCost(
+              raw.modelId,
+              raw.tokenUsage.inputTokens,
+              raw.tokenUsage.outputTokens,
+              raw.tokenUsage.cacheReadInputTokens,
+              raw.tokenUsage.cacheCreationInputTokens,
+            );
+          }
 
           const totalTok =
             raw.tokenUsage.inputTokens + raw.tokenUsage.outputTokens;
@@ -145,7 +164,10 @@ export function registerScanCommand(program: Command): void {
             toolCallCount: raw.toolCallCount,
             userPrompts: JSON.stringify(raw.userPrompts.slice(0, 5)),
             workingDirectory: raw.projectPath,
-            estimatedCostUsd: cost,
+            estimatedCostUsd: totalCost,
+            modelTokens: JSON.stringify(raw.modelTokens),
+            modelCosts: JSON.stringify(modelCosts),
+            subagentCount: raw.subagentCount,
             sourceFile: "",
             importedAt: Date.now(),
           });

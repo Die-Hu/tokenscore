@@ -52,6 +52,9 @@ export const sessions = sqliteTable(
     workingDirectory: text("working_directory"),
     filesModified: text("files_modified"),
     estimatedCostUsd: real("estimated_cost_usd").default(0),
+    modelTokens: text("model_tokens"),          // JSON: { "claude-opus-4-6": 12345, ... }
+    modelCosts: text("model_costs"),             // JSON: { "claude-opus-4-6": 1.23, ... }
+    subagentCount: integer("subagent_count").default(0),
     sourceFile: text("source_file"),
     importedAt: integer("imported_at").notNull(),
   },

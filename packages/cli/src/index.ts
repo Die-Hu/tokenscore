@@ -7,6 +7,7 @@ import { registerExportCommand } from "./commands/export.js";
 import { registerConfigCommand } from "./commands/config.js";
 import { registerScoreCommand } from "./commands/score.js";
 import { registerStatsCommand } from "./commands/stats.js";
+import { registerContributorsCommand } from "./commands/contributors.js";
 
 export function createProgram(): Command {
   const program = new Command();
@@ -21,6 +22,7 @@ export function createProgram(): Command {
   registerProjectsCommand(program);
   registerProjectCommand(program);
   registerScoreCommand(program);
+  registerContributorsCommand(program);
   registerStatsCommand(program);
   registerExportCommand(program);
   registerConfigCommand(program);

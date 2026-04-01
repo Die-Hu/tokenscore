@@ -31,3 +31,5 @@ export { estimateCost, getModelPricing } from "./pricing/models.js";
 // Config
 export { loadConfig, saveConfig, getConfigPath } from "./config/index.js";
 export { DEFAULT_CONFIG } from "./config/defaults.js";
+export { detectPlan, getPlanInfo } from "./config/plan.js";
+export type { UserPlan, PlanInfo } from "./config/plan.js";

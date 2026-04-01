@@ -68,7 +68,15 @@ CREATE TABLE IF NOT EXISTS scan_log (
 );
 `;
 
+const MIGRATION_V2 = `
+ALTER TABLE sessions ADD COLUMN model_tokens TEXT;
+ALTER TABLE sessions ADD COLUMN model_costs TEXT;
+ALTER TABLE sessions ADD COLUMN subagent_count INTEGER DEFAULT 0;
+`;
+
 export function runMigrations(): void {
   const sqlite = getSqlite();
   sqlite.exec(INITIAL_MIGRATION);
+  // V2: add model_tokens, model_costs, subagent_count columns
+  try { sqlite.exec(MIGRATION_V2); } catch { /* columns already exist */ }
 }
