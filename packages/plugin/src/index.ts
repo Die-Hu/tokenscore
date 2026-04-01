@@ -188,7 +188,7 @@ async function main() {
   }
   lines.push(line1);
 
-  // ── Cost ─────────────────────────────────────────────────────
+  // ── Cost (always shown) ───────────────────────────────────────
   if (config.showCost) {
     // Prefer Claude Code's native cost if available
     let costNow = stdin.cost?.total_cost_usd ?? 0;
@@ -205,32 +205,29 @@ async function main() {
       }
     }
 
-    if (costNow > 0 || totalTok > 0) {
-      // Persist cost
-      const sid = stdin.transcript_path ?? "";
-      const cc = loadCostCache(sid);
-      if (costNow > cc.sessionCost) {
-        cc.sessionCost = costNow;
-        saveCostCache(cc);
-      }
-
-      const costFn = costNow >= config.costWarningThreshold ? c.bRed
-        : costNow >= config.costWarningThreshold * 0.5 ? c.bYellow
-        : c.green;
-
-      let costLine = `  $ ${costFn(fmtCost(costNow))}`;
-
-      // Cache efficiency
-      if (totalTok > 0) {
-        costLine += c.dim(` | cache ${Math.round((cacheRd / totalTok) * 100)}%`);
-      }
-
-      if (config.showScore) {
-        costLine += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
-      }
-
-      lines.push(costLine);
+    // Persist cost
+    const sid = stdin.transcript_path ?? "";
+    const cc = loadCostCache(sid);
+    if (costNow > cc.sessionCost) {
+      cc.sessionCost = costNow;
+      saveCostCache(cc);
     }
+
+    const costFn = costNow >= config.costWarningThreshold ? c.bRed
+      : costNow >= config.costWarningThreshold * 0.5 ? c.bYellow
+      : c.green;
+
+    let costLine = `  $ ${costFn(fmtCost(costNow))}`;
+
+    if (totalTok > 0) {
+      costLine += c.dim(` | cache ${Math.round((cacheRd / totalTok) * 100)}%`);
+    }
+
+    if (config.showScore) {
+      costLine += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
+    }
+
+    lines.push(costLine);
   }
 
   // ── Rate Limits ──────────────────────────────────────────────

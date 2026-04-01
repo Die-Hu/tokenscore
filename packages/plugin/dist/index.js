@@ -185,23 +185,21 @@ async function main() {
         costNow = inTok / 1e6 * pricing.input + outTok / 1e6 * pricing.output + cacheRd / 1e6 * pricing.cacheRead + cacheCr / 1e6 * pricing.cacheCreation;
       }
     }
-    if (costNow > 0 || totalTok > 0) {
-      const sid = stdin.transcript_path ?? "";
-      const cc = loadCostCache(sid);
-      if (costNow > cc.sessionCost) {
-        cc.sessionCost = costNow;
-        saveCostCache(cc);
-      }
-      const costFn = costNow >= config.costWarningThreshold ? c.bRed : costNow >= config.costWarningThreshold * 0.5 ? c.bYellow : c.green;
-      let costLine = `  $ ${costFn(fmtCost(costNow))}`;
-      if (totalTok > 0) {
-        costLine += c.dim(` | cache ${Math.round(cacheRd / totalTok * 100)}%`);
-      }
-      if (config.showScore) {
-        costLine += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
-      }
-      lines.push(costLine);
+    const sid = stdin.transcript_path ?? "";
+    const cc = loadCostCache(sid);
+    if (costNow > cc.sessionCost) {
+      cc.sessionCost = costNow;
+      saveCostCache(cc);
     }
+    const costFn = costNow >= config.costWarningThreshold ? c.bRed : costNow >= config.costWarningThreshold * 0.5 ? c.bYellow : c.green;
+    let costLine = `  $ ${costFn(fmtCost(costNow))}`;
+    if (totalTok > 0) {
+      costLine += c.dim(` | cache ${Math.round(cacheRd / totalTok * 100)}%`);
+    }
+    if (config.showScore) {
+      costLine += c.dim(` | IQ ${getModelIntelligenceScore(modelId)}`);
+    }
+    lines.push(costLine);
   }
   if (config.showRateLimit && stdin.rate_limits) {
     const fh = stdin.rate_limits.five_hour;
