@@ -168,14 +168,14 @@ function computeCost(tp, fallbackModel) {
   saveCache({ sid: tp, cost, sz });
   return cost;
 }
-function main() {
+async function main() {
   if (process.stdin.isTTY) return;
-  let raw;
-  try {
-    raw = readFileSync(0, "utf-8");
-  } catch {
-    return;
-  }
+  const timeout = setTimeout(() => process.exit(0), 200);
+  const chunks = [];
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  clearTimeout(timeout);
+  const raw = chunks.join("");
   if (!raw.trim()) return;
   let d;
   try {
@@ -240,5 +240,6 @@ function extractFamily(mid) {
   if (p[0] === "claude" && p.length >= 3) return p[1].charAt(0).toUpperCase() + p[1].slice(1);
   return mid;
 }
-main();
+main().catch(() => {
+});
 //# sourceMappingURL=index.js.map

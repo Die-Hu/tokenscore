@@ -156,12 +156,18 @@ function computeCost(tp: string, fallbackModel: string): number {
   return cost;
 }
 
-// ── Main (fully synchronous for speed) ───────────────────────────
-function main() {
+// ── Main ─────────────────────────────────────────────────────────
+async function main() {
   if (process.stdin.isTTY) return;
 
-  let raw: string;
-  try { raw = readFileSync(0, "utf-8"); } catch { return; }
+  // Async stdin — readFileSync(0) breaks on Windows (nodejs/node#19831)
+  const timeout = setTimeout(() => process.exit(0), 200);
+  const chunks: string[] = [];
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) chunks.push(chunk as string);
+  clearTimeout(timeout);
+
+  const raw = chunks.join("");
   if (!raw.trim()) return;
 
   let d: StdinData;
@@ -239,4 +245,4 @@ function extractFamily(mid: string): string {
   return mid;
 }
 
-main();
+main().catch(() => {});
