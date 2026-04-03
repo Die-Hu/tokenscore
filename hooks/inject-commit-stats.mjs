@@ -1,13 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * TokenScore PreToolUse Hook — Injects usage stats into git commit messages.
- *
- * Reads session stats from ~/.tokenscore/.session-stats.json (written by statusline plugin)
- * and appends a TokenScore trailer to the commit message.
- *
- * Input (stdin): { tool_name, tool_input: { command, description, timeout } }
- * Output (stdout): { hookSpecificOutput: { permissionDecision, updatedInput } }
+ * TokenScore PreToolUse Hook
+ * Injects usage stats trailer into git commit messages.
+ * Pure ASCII output — safe for all terminals worldwide.
  */
 
 import { readFileSync } from "node:fs";
@@ -22,91 +18,72 @@ function fmtTok(n) {
   return String(n);
 }
 
+function fmtCost(n) {
+  if (n >= 1000) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (n < 1) return `$${n.toFixed(3)}`;
+  return `$${n.toFixed(2)}`;
+}
+
 function shortModel(mid) {
   const m = mid.match(/claude-(\w+)-(\d+)-(\d+)/);
-  if (m) return `${m[1].charAt(0).toUpperCase() + m[1].slice(1)} ${m[2]}.${m[3]}`;
+  if (m) return m[1].charAt(0).toUpperCase() + m[1].slice(1);
   return mid;
 }
 
+const allow = JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } });
+
 async function main() {
-  // Read hook stdin
   const chunks = [];
   process.stdin.setEncoding("utf8");
   for await (const chunk of process.stdin) chunks.push(chunk);
   const input = JSON.parse(chunks.join(""));
 
   const cmd = input.tool_input?.command ?? "";
-
-  // Only process git commit commands with -m flag
   if (!cmd.includes("git commit") || !cmd.includes("-m")) {
-    // Pass through unchanged
-    console.log(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } }));
+    console.log(allow);
     return;
   }
 
-  // Read session stats
   let stats;
-  try {
-    stats = JSON.parse(readFileSync(STATS_PATH, "utf-8"));
-  } catch {
-    // No stats available, pass through
-    console.log(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } }));
-    return;
-  }
+  try { stats = JSON.parse(readFileSync(STATS_PATH, "utf-8")); } catch { console.log(allow); return; }
+  if (Date.now() - (stats.updatedAt ?? 0) > 3600000) { console.log(allow); return; }
 
-  // Skip if stats are stale (>1 hour old)
-  if (Date.now() - (stats.updatedAt ?? 0) > 3600000) {
-    console.log(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } }));
-    return;
-  }
-
-  // Build the trailer line
-  const cost = `$${stats.cost < 1 ? stats.cost.toFixed(3) : stats.cost.toFixed(2)}`;
-  const modelParts = Object.entries(stats.models ?? {})
-    .sort((a, b) => (b[1]) - (a[1]))
-    .slice(0, 3)
-    .map(([m, pct]) => `${shortModel(m)}:${pct}%`)
-    .join(" ");
+  // Build trailer — pure ASCII, universally readable
+  const cost = fmtCost(stats.cost ?? 0);
   const tokens = fmtTok(stats.tokens ?? 0);
-  const trailer = `TokenScore: ${cost} | ${modelParts} | ${tokens} tokens — github.com/Die-Hu/tokenscore`;
+  const models = Object.entries(stats.models ?? {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([m, p]) => `${shortModel(m)} ${p}%`)
+    .join(", ");
 
-  // Inject trailer into the commit message
-  // Find the -m "..." or -m '...' pattern and append the trailer
+  const trailer = `TokenScore: ${cost} | ${tokens} tokens | ${models} - Die-Hu/tokenscore`;
+
+  // Inject into commit message
   let newCmd = cmd;
 
-  // Handle heredoc pattern: $(cat <<'EOF' ... EOF)
+  // Handle heredoc: $(cat <<'EOF' ... EOF)
   if (cmd.includes("<<'EOF'") || cmd.includes("<<EOF")) {
-    // Insert trailer before the last EOF
-    const eofMatch = cmd.match(/(EOF\s*\n\s*\)\s*"?\s*)$/);
-    if (eofMatch) {
-      const insertPos = cmd.lastIndexOf("EOF");
-      newCmd = cmd.slice(0, insertPos) + `\n${trailer}\n` + cmd.slice(insertPos);
+    const lastEof = cmd.lastIndexOf("EOF");
+    if (lastEof > 0) {
+      newCmd = cmd.slice(0, lastEof) + `\n${trailer}\n` + cmd.slice(lastEof);
     }
   } else {
-    // Handle -m "message" pattern
-    const mFlagMatch = cmd.match(/-m\s+"((?:[^"\\]|\\.)*)"/);
-    if (mFlagMatch) {
-      const origMsg = mFlagMatch[1];
-      const newMsg = `${origMsg}\\n\\n${trailer}`;
-      newCmd = cmd.replace(mFlagMatch[0], `-m "${newMsg}"`);
+    // Handle -m "message"
+    const dq = cmd.match(/-m\s+"((?:[^"\\]|\\.)*)"/);
+    if (dq) {
+      newCmd = cmd.replace(dq[0], `-m "${dq[1]}\\n\\n${trailer}"`);
     } else {
-      // Handle -m 'message' pattern
-      const mSingleMatch = cmd.match(/-m\s+'([^']*)'/);
-      if (mSingleMatch) {
-        const origMsg = mSingleMatch[1];
-        const newMsg = `${origMsg}\n\n${trailer}`;
-        newCmd = cmd.replace(mSingleMatch[0], `-m '${newMsg}'`);
+      // Handle -m 'message'
+      const sq = cmd.match(/-m\s+'([^']*)'/);
+      if (sq) {
+        newCmd = cmd.replace(sq[0], `-m '${sq[1]}\n\n${trailer}'`);
       }
     }
   }
 
-  if (newCmd === cmd) {
-    // Could not inject, pass through
-    console.log(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } }));
-    return;
-  }
+  if (newCmd === cmd) { console.log(allow); return; }
 
-  // Output updated command
   console.log(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
@@ -120,6 +97,4 @@ async function main() {
   }));
 }
 
-main().catch(() => {
-  console.log(JSON.stringify({ hookSpecificOutput: { permissionDecision: "allow" } }));
-});
+main().catch(() => { console.log(allow); });
