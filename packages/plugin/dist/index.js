@@ -102,6 +102,7 @@ function bar(pct, w = 8) {
 }
 var CACHE_DIR = join(homedir(), ".tokenscore");
 var CACHE_PATH = join(CACHE_DIR, ".cost-cache.json");
+var STATS_PATH = join(CACHE_DIR, ".session-stats.json");
 var USAGE_NEEDLE = Buffer.from('"usage"');
 var NL = 10;
 function loadCache() {
@@ -111,31 +112,47 @@ function loadCache() {
     return null;
   }
 }
-function saveCache(cc) {
+function saveState(cc) {
   try {
     mkdirSync(CACHE_DIR, { recursive: true });
     writeFileSync(CACHE_PATH, JSON.stringify(cc));
+    const totalOut = Object.values(cc.models).reduce((a, b) => a + b, 0) || 1;
+    const modelPcts = {};
+    for (const [m, t] of Object.entries(cc.models)) {
+      modelPcts[m] = Math.round(t / totalOut * 100);
+    }
+    writeFileSync(STATS_PATH, JSON.stringify({
+      cost: cc.cost,
+      tokens: cc.tokens,
+      models: modelPcts,
+      updatedAt: Date.now()
+    }));
   } catch {
   }
 }
 function computeCost(tp, fallbackModel) {
-  if (!tp) return 0;
+  const empty = { sid: tp, cost: 0, sz: 0, models: {}, tokens: 0 };
+  if (!tp) return empty;
   let sz;
   try {
     sz = statSync(tp).size;
   } catch {
-    return 0;
+    return empty;
   }
   const cc = loadCache();
-  if (cc && cc.sid === tp && sz === cc.sz) return cc.cost;
+  if (cc && cc.sid === tp && sz === cc.sz) return cc;
   let offset = 0;
   let cost = 0;
+  let models = {};
+  let tokens = 0;
   if (cc && cc.sid === tp && sz > cc.sz) {
     offset = cc.sz;
     cost = cc.cost;
+    models = { ...cc.models };
+    tokens = cc.tokens;
   }
   const len = sz - offset;
-  if (len <= 0) return cost;
+  if (len <= 0) return cc ?? empty;
   try {
     const buf = Buffer.allocUnsafe(len);
     const fd = openSync(tp, "r");
@@ -153,9 +170,14 @@ function computeCost(tp, fallbackModel) {
         const entry = JSON.parse(buf.toString("utf-8", ls, le));
         const u = entry.message?.usage;
         if (u) {
-          const p = getModelPricing(entry.message.model ?? fallbackModel);
+          const model = entry.message.model ?? fallbackModel;
+          const p = getModelPricing(model);
           if (p) {
-            cost += (u.input_tokens ?? 0) / 1e6 * p.input + (u.output_tokens ?? 0) / 1e6 * p.output + (u.cache_read_input_tokens ?? 0) / 1e6 * p.cacheRead + (u.cache_creation_input_tokens ?? 0) / 1e6 * p.cacheCreation;
+            const inT = u.input_tokens ?? 0;
+            const outT = u.output_tokens ?? 0;
+            cost += inT / 1e6 * p.input + outT / 1e6 * p.output + (u.cache_read_input_tokens ?? 0) / 1e6 * p.cacheRead + (u.cache_creation_input_tokens ?? 0) / 1e6 * p.cacheCreation;
+            models[model] = (models[model] ?? 0) + outT;
+            tokens += inT + outT;
           }
         }
       } catch {
@@ -163,10 +185,11 @@ function computeCost(tp, fallbackModel) {
       pos = le + 1;
     }
   } catch {
-    return cc?.cost ?? 0;
+    return cc ?? empty;
   }
-  saveCache({ sid: tp, cost, sz });
-  return cost;
+  const result = { sid: tp, cost, sz, models, tokens };
+  saveState(result);
+  return result;
 }
 async function main() {
   if (process.stdin.isTTY) return;
@@ -200,7 +223,8 @@ async function main() {
     l1 += c.dim(` (in:${fmtTok(inTok)} out:${fmtTok(outTok)} cache:${fmtTok(cacheRd)})`);
   }
   lines.push(l1);
-  let sessionCost = computeCost(d.transcript_path ?? "", mid);
+  const stats = computeCost(d.transcript_path ?? "", mid);
+  let sessionCost = stats.cost;
   if (sessionCost === 0) sessionCost = d.cost?.total_cost_usd ?? 0;
   const costFn = sessionCost >= 5 ? c.bRed : sessionCost >= 2.5 ? c.bYellow : c.green;
   let l2 = `  $ ${costFn(fmtCost(sessionCost))}`;

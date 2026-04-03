@@ -1,7 +1,7 @@
 {
   "name": "tokenscore",
   "description": "Real-time token cost tracking, 3D scoring, and usage analytics for Claude Code",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "Die-Hu",
     "url": "https://github.com/Die-Hu"
@@ -9,8 +9,9 @@
   "commands": [
     "./commands/setup.md"
   ],
+  "hooks": "./hooks/hooks.json",
   "homepage": "https://github.com/Die-Hu/tokenscore",
   "repository": "https://github.com/Die-Hu/tokenscore",
   "license": "MIT",
-  "keywords": ["tokenscore", "token", "cost", "scoring", "statusline", "analytics"]
+  "keywords": ["tokenscore", "token", "cost", "scoring", "statusline", "analytics", "commit"]
 }

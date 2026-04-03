@@ -69,15 +69,18 @@ function bar(pct: number, w = 8): string {
   return c.bGreen(b);
 }
 
-// ── Incremental JSONL cost parser ────────────────────────────────
+// ── Incremental JSONL cost + model parser ────────────────────────
 interface CostCache {
-  sid: string;    // transcript_path
-  cost: number;   // cumulative USD
-  sz: number;     // file byte offset
+  sid: string;                         // transcript_path
+  cost: number;                        // cumulative USD
+  sz: number;                          // file byte offset
+  models: Record<string, number>;      // model -> output tokens
+  tokens: number;                      // total tokens (in+out)
 }
 
 const CACHE_DIR = join(homedir(), ".tokenscore");
 const CACHE_PATH = join(CACHE_DIR, ".cost-cache.json");
+const STATS_PATH = join(CACHE_DIR, ".session-stats.json");
 const USAGE_NEEDLE = Buffer.from('"usage"');
 const NL = 0x0A;
 
@@ -85,33 +88,50 @@ function loadCache(): CostCache | null {
   try { return JSON.parse(readFileSync(CACHE_PATH, "utf-8")); } catch { return null; }
 }
 
-function saveCache(cc: CostCache): void {
+function saveState(cc: CostCache): void {
   try {
     mkdirSync(CACHE_DIR, { recursive: true });
     writeFileSync(CACHE_PATH, JSON.stringify(cc));
+    // Also write session-stats.json for the commit hook to consume
+    const totalOut = Object.values(cc.models).reduce((a, b) => a + b, 0) || 1;
+    const modelPcts: Record<string, number> = {};
+    for (const [m, t] of Object.entries(cc.models)) {
+      modelPcts[m] = Math.round((t / totalOut) * 100);
+    }
+    writeFileSync(STATS_PATH, JSON.stringify({
+      cost: cc.cost,
+      tokens: cc.tokens,
+      models: modelPcts,
+      updatedAt: Date.now(),
+    }));
   } catch {}
 }
 
-function computeCost(tp: string, fallbackModel: string): number {
-  if (!tp) return 0;
+function computeCost(tp: string, fallbackModel: string): CostCache {
+  const empty: CostCache = { sid: tp, cost: 0, sz: 0, models: {}, tokens: 0 };
+  if (!tp) return empty;
 
   let sz: number;
-  try { sz = statSync(tp).size; } catch { return 0; }
+  try { sz = statSync(tp).size; } catch { return empty; }
 
   const cc = loadCache();
 
   // Fast path: same session, no new data
-  if (cc && cc.sid === tp && sz === cc.sz) return cc.cost;
+  if (cc && cc.sid === tp && sz === cc.sz) return cc;
 
   let offset = 0;
   let cost = 0;
+  let models: Record<string, number> = {};
+  let tokens = 0;
   if (cc && cc.sid === tp && sz > cc.sz) {
     offset = cc.sz;
     cost = cc.cost;
+    models = { ...cc.models };
+    tokens = cc.tokens;
   }
 
   const len = sz - offset;
-  if (len <= 0) return cost;
+  if (len <= 0) return cc ?? empty;
 
   try {
     const buf = Buffer.allocUnsafe(len);
@@ -119,13 +139,11 @@ function computeCost(tp: string, fallbackModel: string): number {
     readSync(fd, buf, 0, len, offset);
     closeSync(fd);
 
-    // Buffer scan: find "usage" needle, extract only those lines
     let pos = 0;
     while (pos < len) {
       const idx = buf.indexOf(USAGE_NEEDLE, pos);
       if (idx === -1) break;
 
-      // Find line boundaries
       let ls = idx;
       while (ls > 0 && buf[ls - 1] !== NL) ls--;
       let le = idx;
@@ -135,13 +153,18 @@ function computeCost(tp: string, fallbackModel: string): number {
         const entry = JSON.parse(buf.toString("utf-8", ls, le));
         const u = entry.message?.usage;
         if (u) {
-          const p = getModelPricing(entry.message.model ?? fallbackModel);
+          const model = entry.message.model ?? fallbackModel;
+          const p = getModelPricing(model);
           if (p) {
+            const inT = u.input_tokens ?? 0;
+            const outT = u.output_tokens ?? 0;
             cost +=
-              ((u.input_tokens ?? 0) / 1e6) * p.input +
-              ((u.output_tokens ?? 0) / 1e6) * p.output +
+              (inT / 1e6) * p.input +
+              (outT / 1e6) * p.output +
               ((u.cache_read_input_tokens ?? 0) / 1e6) * p.cacheRead +
               ((u.cache_creation_input_tokens ?? 0) / 1e6) * p.cacheCreation;
+            models[model] = (models[model] ?? 0) + outT;
+            tokens += inT + outT;
           }
         }
       } catch {}
@@ -149,11 +172,12 @@ function computeCost(tp: string, fallbackModel: string): number {
       pos = le + 1;
     }
   } catch {
-    return cc?.cost ?? 0;
+    return cc ?? empty;
   }
 
-  saveCache({ sid: tp, cost, sz });
-  return cost;
+  const result: CostCache = { sid: tp, cost, sz, models, tokens };
+  saveState(result);
+  return result;
 }
 
 // ── Main ─────────────────────────────────────────────────────────
@@ -198,7 +222,8 @@ async function main() {
   lines.push(l1);
 
   // ── Line 2: Session cost (cumulative from JSONL) ────────────
-  let sessionCost = computeCost(d.transcript_path ?? "", mid);
+  const stats = computeCost(d.transcript_path ?? "", mid);
+  let sessionCost = stats.cost;
   if (sessionCost === 0) sessionCost = d.cost?.total_cost_usd ?? 0;
 
   const costFn = sessionCost >= 5 ? c.bRed : sessionCost >= 2.5 ? c.bYellow : c.green;

@@ -1,0 +1,17 @@
+{
+  "description": "TokenScore — auto-inject usage stats into git commit messages",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/inject-commit-stats.mjs",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
