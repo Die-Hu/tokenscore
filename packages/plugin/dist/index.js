@@ -124,6 +124,12 @@ function saveState(cc) {
     writeFileSync(STATS_PATH, JSON.stringify({
       cost: cc.cost,
       tokens: cc.tokens,
+      outputTokens: totalOut,
+      inputTokens: cc.inputTokens ?? 0,
+      cacheReadTokens: cc.cacheReadTokens ?? 0,
+      cacheCreationTokens: cc.cacheCreationTokens ?? 0,
+      toolCallCount: cc.toolCallCount ?? 0,
+      userMessageCount: cc.userMessageCount ?? 0,
       models: modelPcts,
       updatedAt: Date.now()
     }));
@@ -131,7 +137,7 @@ function saveState(cc) {
   }
 }
 function computeCost(tp, fallbackModel) {
-  const empty = { sid: tp, cost: 0, sz: 0, models: {}, tokens: 0 };
+  const empty = { sid: tp, cost: 0, sz: 0, models: {}, tokens: 0, inputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, toolCallCount: 0, userMessageCount: 0 };
   if (!tp) return empty;
   let sz;
   try {
@@ -145,11 +151,21 @@ function computeCost(tp, fallbackModel) {
   let cost = 0;
   let models = {};
   let tokens = 0;
+  let inputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
+  let toolCallCount = 0;
+  let userMessageCount = 0;
   if (cc && cc.sid === tp && sz > cc.sz) {
     offset = cc.sz;
     cost = cc.cost;
     models = { ...cc.models };
     tokens = cc.tokens;
+    inputTokens = cc.inputTokens ?? 0;
+    cacheReadTokens = cc.cacheReadTokens ?? 0;
+    cacheCreationTokens = cc.cacheCreationTokens ?? 0;
+    toolCallCount = cc.toolCallCount ?? 0;
+    userMessageCount = cc.userMessageCount ?? 0;
   }
   const len = sz - offset;
   if (len <= 0) return cc ?? empty;
@@ -168,6 +184,9 @@ function computeCost(tp, fallbackModel) {
       while (le < len && buf[le] !== NL) le++;
       try {
         const entry = JSON.parse(buf.toString("utf-8", ls, le));
+        if (entry.type === "user" && !entry.toolUseResult) {
+          userMessageCount++;
+        }
         const u = entry.message?.usage;
         if (u) {
           const model = entry.message.model ?? fallbackModel;
@@ -175,9 +194,20 @@ function computeCost(tp, fallbackModel) {
           if (p) {
             const inT = u.input_tokens ?? 0;
             const outT = u.output_tokens ?? 0;
-            cost += inT / 1e6 * p.input + outT / 1e6 * p.output + (u.cache_read_input_tokens ?? 0) / 1e6 * p.cacheRead + (u.cache_creation_input_tokens ?? 0) / 1e6 * p.cacheCreation;
+            const cRd = u.cache_read_input_tokens ?? 0;
+            const cCr = u.cache_creation_input_tokens ?? 0;
+            cost += inT / 1e6 * p.input + outT / 1e6 * p.output + cRd / 1e6 * p.cacheRead + cCr / 1e6 * p.cacheCreation;
             models[model] = (models[model] ?? 0) + outT;
             tokens += inT + outT;
+            inputTokens += inT;
+            cacheReadTokens += cRd;
+            cacheCreationTokens += cCr;
+          }
+        }
+        const content = entry.message?.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (block?.type === "tool_use") toolCallCount++;
           }
         }
       } catch {
@@ -187,7 +217,7 @@ function computeCost(tp, fallbackModel) {
   } catch {
     return cc ?? empty;
   }
-  const result = { sid: tp, cost, sz, models, tokens };
+  const result = { sid: tp, cost, sz, models, tokens, inputTokens, cacheReadTokens, cacheCreationTokens, toolCallCount, userMessageCount };
   saveState(result);
   return result;
 }

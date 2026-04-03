@@ -51,24 +51,29 @@ function getTier(score) {
   return TIERS[TIERS.length - 1];
 }
 
-// Simple score estimate from session stats (without full DB)
+// Iron Law scoring — geometric mean of 3 dimensionless ratios
+// No weights, no decay, no subjectivity
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+
 function estimateScore(stats) {
-  const tokens = stats.tokens ?? 0;
-  const models = stats.models ?? {};
+  const outTok = stats.outputTokens ?? stats.tokens ?? 0;
+  const inTok = stats.inputTokens ?? Math.round(outTok * 0.1);
+  const cacheRd = stats.cacheReadTokens ?? 0;
+  const cacheCr = stats.cacheCreationTokens ?? 0;
+  const toolCalls = stats.toolCallCount ?? 0;
+  const userMsgs = stats.userMessageCount ?? 1;
 
-  // Efficiency: fewer tokens = better (log10 scale)
-  const logTok = Math.log10(Math.max(tokens, 1) + 1);
-  const efficiency = Math.max(0, Math.min(100, 100 - logTok * 16.7));
+  const r1 = outTok / (inTok + 1);
+  const totalIn = cacheRd + inTok + cacheCr;
+  const r2 = totalIn > 0 ? cacheRd / (totalIn + 1) : 0;
+  const r3 = toolCalls / (userMsgs + 1);
 
-  // Difficulty: more models + higher cost = harder project
-  const modelCount = Object.keys(models).length;
-  const difficulty = Math.min(100, 30 + modelCount * 15 + Math.min(40, (stats.cost ?? 0) / 5));
+  const n1 = sigmoid(2.0 * (r1 - 1.0));
+  const n2 = sigmoid(6.0 * (r2 - 0.4));
+  const n3 = sigmoid(1.5 * (Math.log(r3 + 1) - 1.5));
 
-  // Model intel: check if using frontier models
-  const hasOpus = Object.keys(models).some(m => m.includes("opus"));
-  const modelIntel = hasOpus ? 95 : 80;
-
-  return Math.round(efficiency * 0.4 + difficulty * 0.35 + modelIntel * 0.25);
+  const geo = Math.pow(Math.max(n1, 0.001) * Math.max(n2, 0.001) * Math.max(n3, 0.001), 1/3);
+  return Math.round(Math.max(0, Math.min(100, geo * 100)));
 }
 
 function shortModel(mid) {

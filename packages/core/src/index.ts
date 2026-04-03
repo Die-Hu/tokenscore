@@ -18,6 +18,8 @@ export { calculateEfficiency } from "./scoring/efficiency.js";
 export { calculateComposite } from "./scoring/composite.js";
 export { assignGrade } from "./scoring/grades.js";
 export { estimateDifficulty } from "./scoring/difficulty.js";
+export { calculateIronLaw, getIronTier } from "./scoring/iron-law.js";
+export type { IronLawParams, IronLawResult, IronTier } from "./scoring/iron-law.js";
 export {
   getModelRanking,
   getModelIntelligenceScore,
