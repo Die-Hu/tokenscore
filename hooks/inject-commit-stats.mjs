@@ -26,17 +26,49 @@ function fmtCost(n) {
 }
 
 function fmtCostBadge(n) {
-  // Badge shows rounded dollars — confident, not penny-counting
   if (n >= 1000) return `$${Math.round(n).toLocaleString("en-US")}`;
   if (n < 1) return `<$1`;
   return `$${Math.round(n)}`;
 }
 
-function badgeColor(n) {
-  if (n >= 500) return "FF6B6B";  // red-coral — serious investment
-  if (n >= 200) return "DAA520";  // gold
-  if (n >= 50) return "8A2BE2";   // purple
-  return "007EC6";                // blue — getting started
+// ── Tier system (based on composite score, not dollars) ──────────
+// Score = weighted composite of efficiency, difficulty, model intel
+// This stays meaningful forever — relative ranking, not absolute cost
+const TIERS = [
+  { min: 95, name: "ARCHITECT",  grade: "S+", color: "000000", labelColor: "000000", msgColor: "ffffff", style: "for-the-badge" },
+  { min: 85, name: "VIRTUOSO",   grade: "S",  color: "7B2D8E", style: "for-the-badge" },
+  { min: 75, name: "PIONEER",    grade: "A",  color: "0969DA", style: "for-the-badge" },
+  { min: 65, name: "ARTISAN",    grade: "B+", color: "1A7F37", style: "for-the-badge" },
+  { min: 50, name: "BUILDER",    grade: "C",  color: "BF8700", style: "for-the-badge" },
+  { min: 40, name: "APPRENTICE", grade: "D",  color: "6E7781", style: "flat-square" },
+  { min: 0,  name: "SPARK",      grade: "F",  color: "C0C0C0", style: "flat-square" },
+];
+
+function getTier(score) {
+  for (const t of TIERS) {
+    if (score >= t.min) return t;
+  }
+  return TIERS[TIERS.length - 1];
+}
+
+// Simple score estimate from session stats (without full DB)
+function estimateScore(stats) {
+  const tokens = stats.tokens ?? 0;
+  const models = stats.models ?? {};
+
+  // Efficiency: fewer tokens = better (log10 scale)
+  const logTok = Math.log10(Math.max(tokens, 1) + 1);
+  const efficiency = Math.max(0, Math.min(100, 100 - logTok * 16.7));
+
+  // Difficulty: more models + higher cost = harder project
+  const modelCount = Object.keys(models).length;
+  const difficulty = Math.min(100, 30 + modelCount * 15 + Math.min(40, (stats.cost ?? 0) / 5));
+
+  // Model intel: check if using frontier models
+  const hasOpus = Object.keys(models).some(m => m.includes("opus"));
+  const modelIntel = hasOpus ? 95 : 80;
+
+  return Math.round(efficiency * 0.4 + difficulty * 0.35 + modelIntel * 0.25);
 }
 
 function shortModel(mid) {
@@ -65,17 +97,30 @@ async function main() {
 
   const cost = stats.cost ?? 0;
 
-  // ── Write .tokenscore/badge.json in the project directory ────
+  // ── Write badges in the project directory ─────────────────────
   const cwd = input.tool_input?.cwd ?? input.cwd ?? process.cwd();
+  const score = estimateScore(stats);
+  const tier = getTier(score);
   try {
     const badgeDir = join(cwd, ".tokenscore");
     if (!existsSync(badgeDir)) mkdirSync(badgeDir, { recursive: true });
+    // Investment badge
     writeFileSync(join(badgeDir, "badge.json"), JSON.stringify({
       schemaVersion: 1,
       label: "AI Built",
       message: fmtCostBadge(cost),
-      color: badgeColor(cost),
+      color: "007EC6",
     }, null, 2) + "\n");
+    // Tier badge
+    const tierBadge = {
+      schemaVersion: 1,
+      label: tier.name,
+      message: `TokenScore ${tier.grade}`,
+      color: tier.color,
+      style: tier.style,
+    };
+    if (tier.labelColor) tierBadge.labelColor = tier.labelColor;
+    writeFileSync(join(badgeDir, "tier.json"), JSON.stringify(tierBadge, null, 2) + "\n");
   } catch {}
 
   // ── Build commit trailer ─────────────────────────────────────
@@ -114,8 +159,8 @@ async function main() {
 
   if (newCmd === cmd) { console.log(allow); return; }
 
-  // Prepend: stage badge.json before commit
-  newCmd = `git add .tokenscore/badge.json 2>/dev/null; ${newCmd}`;
+  // Prepend: stage badge files before commit
+  newCmd = `git add .tokenscore/badge.json .tokenscore/tier.json 2>/dev/null; ${newCmd}`;
 
   console.log(JSON.stringify({
     hookSpecificOutput: {

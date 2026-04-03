@@ -1,5 +1,6 @@
 # TokenScore
 
+[![TokenScore Tier](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Die-Hu/tokenscore/main/.tokenscore/tier.json)](https://github.com/Die-Hu/tokenscore)
 [![AI Built](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Die-Hu/tokenscore/main/.tokenscore/badge.json)](https://github.com/Die-Hu/tokenscore)
 
 **Make every token count.**
@@ -138,22 +139,28 @@ TokenScore calculates costs using accurate per-model pricing including cache tok
 
 Supports: Claude Opus/Sonnet/Haiku (4.6/4.5/4/3.x), GPT-4o, GPT-4.1, o3, o4-mini, Codex Mini
 
-## README Badge
+## README Badges
 
-TokenScore auto-generates a `.tokenscore/badge.json` on each commit. Add this to your project's README:
+TokenScore auto-generates badges on each commit. Add these to your project's README:
 
 ```markdown
-[![AI Built](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/.tokenscore/badge.json)](https://github.com/Die-Hu/tokenscore)
+[![TokenScore](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/USER/REPO/main/.tokenscore/tier.json)](https://github.com/Die-Hu/tokenscore)
+[![AI Built](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/USER/REPO/main/.tokenscore/badge.json)](https://github.com/Die-Hu/tokenscore)
 ```
 
-The badge auto-updates with your project's cumulative AI investment. Color changes by level:
+### Tier System
 
-| Investment | Color |
-|-----------|-------|
-| < $50 | Blue |
-| $50 - $200 | Purple |
-| $200 - $500 | Gold |
-| > $500 | Coral |
+Tiers are based on the TokenScore composite (efficiency + difficulty + model intelligence), not raw cost. A $50 project can outrank a $5,000 project if it used AI more efficiently.
+
+| Tier | Score | Meaning |
+|------|-------|---------|
+| **ARCHITECT** | 95+ (S+) | Masterful AI orchestration |
+| **VIRTUOSO** | 85-94 (S) | Exceptional AI command |
+| **PIONEER** | 75-84 (A) | Pushing boundaries |
+| **ARTISAN** | 65-74 (B+) | Skilled, deliberate AI usage |
+| **BUILDER** | 50-64 (C) | Solid AI-assisted development |
+| **APPRENTICE** | 40-49 (D) | Learning the craft |
+| **SPARK** | 0-39 (F) | First steps |
 
 ## Uninstall
 
