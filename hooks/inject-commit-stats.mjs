@@ -2,11 +2,12 @@
 
 /**
  * TokenScore PreToolUse Hook
- * Injects usage stats trailer into git commit messages.
- * Pure ASCII output — safe for all terminals worldwide.
+ * 1. Injects usage stats trailer into git commit messages
+ * 2. Writes .tokenscore/badge.json for shields.io README badge
+ * Pure ASCII — safe for all terminals worldwide.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -19,9 +20,23 @@ function fmtTok(n) {
 }
 
 function fmtCost(n) {
-  if (n >= 1000) return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  if (n < 1) return `$${n.toFixed(3)}`;
+  if (n >= 1000) return `$${Math.round(n).toLocaleString("en-US")}`;
+  if (n < 1) return `$${n.toFixed(2)}`;
   return `$${n.toFixed(2)}`;
+}
+
+function fmtCostBadge(n) {
+  // Badge shows rounded dollars — confident, not penny-counting
+  if (n >= 1000) return `$${Math.round(n).toLocaleString("en-US")}`;
+  if (n < 1) return `<$1`;
+  return `$${Math.round(n)}`;
+}
+
+function badgeColor(n) {
+  if (n >= 500) return "FF6B6B";  // red-coral — serious investment
+  if (n >= 200) return "DAA520";  // gold
+  if (n >= 50) return "8A2BE2";   // purple
+  return "007EC6";                // blue — getting started
 }
 
 function shortModel(mid) {
@@ -48,8 +63,23 @@ async function main() {
   try { stats = JSON.parse(readFileSync(STATS_PATH, "utf-8")); } catch { console.log(allow); return; }
   if (Date.now() - (stats.updatedAt ?? 0) > 3600000) { console.log(allow); return; }
 
-  // Build trailer — pure ASCII, universally readable
-  const cost = fmtCost(stats.cost ?? 0);
+  const cost = stats.cost ?? 0;
+
+  // ── Write .tokenscore/badge.json in the project directory ────
+  const cwd = input.tool_input?.cwd ?? input.cwd ?? process.cwd();
+  try {
+    const badgeDir = join(cwd, ".tokenscore");
+    if (!existsSync(badgeDir)) mkdirSync(badgeDir, { recursive: true });
+    writeFileSync(join(badgeDir, "badge.json"), JSON.stringify({
+      schemaVersion: 1,
+      label: "AI Built",
+      message: fmtCostBadge(cost),
+      color: badgeColor(cost),
+    }, null, 2) + "\n");
+  } catch {}
+
+  // ── Build commit trailer ─────────────────────────────────────
+  const costStr = fmtCost(cost);
   const tokens = fmtTok(stats.tokens ?? 0);
   const models = Object.entries(stats.models ?? {})
     .sort((a, b) => b[1] - a[1])
@@ -57,9 +87,9 @@ async function main() {
     .map(([m, p]) => `${shortModel(m)} ${p}%`)
     .join(", ");
 
-  const trailer = `TokenScore: ${cost} | ${tokens} tokens | ${models} - Die-Hu/tokenscore`;
+  const trailer = `TokenScore: ${costStr} | ${tokens} tokens | ${models} - Die-Hu/tokenscore`;
 
-  // Inject into commit message
+  // ── Inject trailer + stage badge.json ────────────────────────
   let newCmd = cmd;
 
   // Handle heredoc: $(cat <<'EOF' ... EOF)
@@ -83,6 +113,9 @@ async function main() {
   }
 
   if (newCmd === cmd) { console.log(allow); return; }
+
+  // Prepend: stage badge.json before commit
+  newCmd = `git add .tokenscore/badge.json 2>/dev/null; ${newCmd}`;
 
   console.log(JSON.stringify({
     hookSpecificOutput: {

@@ -1,5 +1,7 @@
 # TokenScore
 
+[![AI Built](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Die-Hu/tokenscore/main/.tokenscore/badge.json)](https://github.com/Die-Hu/tokenscore)
+
 **Make every token count.**
 
 Real-time token consumption tracking, cost analysis, and three-dimensional scoring for AI coding tools.
@@ -135,6 +137,23 @@ TokenScore calculates costs using accurate per-model pricing including cache tok
 - **Cache creation** — 125% of input rate
 
 Supports: Claude Opus/Sonnet/Haiku (4.6/4.5/4/3.x), GPT-4o, GPT-4.1, o3, o4-mini, Codex Mini
+
+## README Badge
+
+TokenScore auto-generates a `.tokenscore/badge.json` on each commit. Add this to your project's README:
+
+```markdown
+[![AI Built](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/.tokenscore/badge.json)](https://github.com/Die-Hu/tokenscore)
+```
+
+The badge auto-updates with your project's cumulative AI investment. Color changes by level:
+
+| Investment | Color |
+|-----------|-------|
+| < $50 | Blue |
+| $50 - $200 | Purple |
+| $200 - $500 | Gold |
+| > $500 | Coral |
 
 ## Uninstall
 
